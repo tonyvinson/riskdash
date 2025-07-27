@@ -83,17 +83,9 @@ variable "api_throttling_burst_limit" {
 variable "tenant_onboarding_lambda_function_name" {
   description = "Name of the tenant onboarding Lambda function"
   type        = string
-  default = null
 }
 
 variable "tenant_onboarding_lambda_invoke_arn" {
   description = "Invoke ARN of the tenant onboarding Lambda function"
   type        = string
-  default = null
-}
-
-variable "aws_region" {
-  description = "AWS region for API Gateway deployment"
-  type        = string
-  default     = "us-gov-west-1"
 }

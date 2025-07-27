@@ -6,7 +6,7 @@ data "aws_region" "current" {}
 
 # Determine the correct partition based on region
 locals {
-  aws_partition = startswith(data.aws_region.current.id, "us-gov-") ? "aws-us-gov" : "aws"
+  aws_partition = startswith(data.aws_region.current.name, "us-gov-") ? "aws-us-gov" : "aws"
 }
 
 # Tenant Metadata Table - NEW for SaaS functionality

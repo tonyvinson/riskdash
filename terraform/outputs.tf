@@ -1,3 +1,4 @@
+# DynamoDB Tables
 output "ksi_definitions_table_name" {
   description = "Name of the KSI definitions DynamoDB table"
   value       = module.dynamodb.ksi_definitions_table_name
@@ -13,14 +14,10 @@ output "ksi_execution_history_table_name" {
   value       = module.dynamodb.ksi_execution_history_table_name
 }
 
+# Lambda Functions
 output "orchestrator_lambda_arn" {
   description = "ARN of the KSI orchestrator Lambda function"
   value       = module.lambda.orchestrator_lambda_arn
-}
-
-output "orchestrator_lambda_name" {
-  description = "Name of the KSI orchestrator Lambda function"
-  value       = module.lambda.orchestrator_lambda_name
 }
 
 output "validator_lambda_arns" {
@@ -28,61 +25,64 @@ output "validator_lambda_arns" {
   value       = module.lambda.validator_lambda_arns
 }
 
-output "eventbridge_rule_arn" {
-  description = "ARN of the EventBridge rule for scheduling"
-  value       = module.eventbridge.eventbridge_rule_arn
-}
-
-output "ksi_orchestrator_role_arn" {
-  description = "ARN of the IAM role for KSI orchestrator"
-  value       = module.lambda.orchestrator_role_arn
-}
-
-# API Gateway outputs 
+# API Gateway
 output "api_gateway" {
   description = "API Gateway information"
   value = {
-    api_id       = module.api_gateway.api_gateway_rest_api_id
-    api_arn      = module.api_gateway.api_gateway_rest_api_arn
-    invoke_url   = module.api_gateway.api_gateway_invoke_url
-    stage_arn    = module.api_gateway.api_gateway_stage_arn
-    endpoints    = module.api_gateway.api_endpoints
+    id         = module.api_gateway.api_gateway_id
+    invoke_url = module.api_gateway.api_gateway_invoke_url
+    endpoints = {
+      validate_url   = module.api_gateway.validate_endpoint_url
+      executions_url = module.api_gateway.executions_endpoint_url
+      results_url    = module.api_gateway.results_endpoint_url
+    }
   }
 }
 
-# Quick reference URLs 
+# EventBridge
+output "eventbridge_rule_arn" {
+  description = "ARN of the EventBridge rule for scheduled validations"
+  value       = module.eventbridge.eventbridge_rule_arn
+}
+
+# Quick Reference
 output "quick_reference" {
-  description = "Quick reference information"
+  description = "Quick reference for key endpoints and functions"
   value = {
     api_base_url = module.api_gateway.api_gateway_invoke_url
-    validate_url = "${module.api_gateway.api_gateway_invoke_url}/api/ksi/validate"
-    executions_url = "${module.api_gateway.api_gateway_invoke_url}/api/ksi/executions"
-    results_url = "${module.api_gateway.api_gateway_invoke_url}/api/ksi/results"
-    orchestrator_function = module.lambda.orchestrator_lambda_name
+    validate_url = module.api_gateway.validate_endpoint_url
+    executions_url = module.api_gateway.executions_endpoint_url
+    results_url = module.api_gateway.results_endpoint_url
+    orchestrator_function = module.lambda.orchestrator_lambda_function_name
   }
 }
 
-# =============================================================================
-# ADD THESE TO YOUR terraform/outputs.tf FILE:
-# =============================================================================
-
-# Tenant Management Outputs
-output "tenant_metadata_table_name" {
-  description = "Name of the tenant metadata table"
-  value       = module.tenant_management.tenant_metadata_table_name
+# Account Information
+output "riskuity_account_id" {
+  description = "Current AWS account ID"
+  value       = data.aws_caller_identity.current.account_id
 }
 
-output "tenant_onboarding_api_function_name" {
-  description = "Name of the tenant onboarding API function"
-  value       = module.tenant_management.tenant_onboarding_api_function_name
+# Tenant Management Outputs (if module exists)
+output "tenant_management_api_url" {
+  description = "Tenant Management API Gateway URL"
+  value       = try(module.tenant_management.api_gateway_url, "Not deployed")
+}
+
+output "tenant_onboarding_instructions" {
+  description = "Instructions for tenant onboarding"
+  value = try({
+    api_url = module.tenant_management.api_gateway_url
+    endpoints = {
+      generate_role_instructions = "${module.tenant_management.api_gateway_url}/api/tenant/generate-role-instructions"
+      test_connection = "${module.tenant_management.api_gateway_url}/api/tenant/test-connection"
+      onboard = "${module.tenant_management.api_gateway_url}/api/tenant/onboard"
+      list = "${module.tenant_management.api_gateway_url}/api/tenant/list"
+    }
+  }, "Tenant management not deployed")
 }
 
 output "cross_account_validator_function_name" {
-  description = "Name of the cross-account validator function"
-  value       = module.tenant_management.cross_account_validator_function_name
-}
-
-output "riskuity_account_id" {
-  description = "Riskuity's AWS Account ID for customer role setup"
-  value       = module.tenant_management.riskuity_account_id
+  description = "Cross-account validator Lambda function name"
+  value       = try(module.tenant_management.cross_account_validator_function_name, "Not deployed")
 }

@@ -73,10 +73,9 @@ module "api_gateway" {
   source = "./modules/api_gateway"
   
   environment  = var.environment
-  aws_region   = var.aws_region
   project_name = var.project_name
-#  tenant_onboarding_lambda_function_name = module.tenant_management.tenant_onboarding_api_function_name
-#  tenant_onboarding_lambda_invoke_arn    = module.tenant_management.tenant_onboarding_api_function_arn
+  tenant_onboarding_lambda_function_name = module.tenant_management.tenant_onboarding_api_function_name
+  tenant_onboarding_lambda_invoke_arn    = module.tenant_management.tenant_onboarding_api_function_arn
   
   # Lambda integrations
   orchestrator_lambda_arn = module.lambda.orchestrator_lambda_arn
@@ -94,10 +93,6 @@ module "api_gateway" {
   api_throttling_rate_limit   = var.api_throttling_rate_limit
   api_throttling_burst_limit  = var.api_throttling_burst_limit
   
-    # Tenant management (temporarily disabled)
-  tenant_onboarding_lambda_function_name = module.tenant_management.tenant_onboarding_api_function_name
-  tenant_onboarding_lambda_invoke_arn    = module.tenant_management.tenant_onboarding_api_function_arn
-  
   depends_on = [module.lambda, module.dynamodb]
 }
 
@@ -106,13 +101,6 @@ module "api_gateway" {
 # =============================================================================
 
 # Tenant Management Module - NEW SaaS functionality
-
-
-# Tenant Management Module
-
-
-
-# Tenant Management Module
 module "tenant_management" {
   source = "./modules/tenant_management"
   
