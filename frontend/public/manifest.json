@@ -1,0 +1,8 @@
+{
+  "short_name": "KSI Validator",
+  "name": "Riskuity KSI Validator Platform",
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#000000",
+  "background_color": "#ffffff"
+}

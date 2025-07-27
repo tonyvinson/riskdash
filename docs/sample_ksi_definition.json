@@ -1,0 +1,28 @@
+{
+    "ksi_id": "KSI-CMT-01",
+    "version": "1.0",
+    "category": "CMT",
+    "title": "Configuration Management and Change Tracking",
+    "description": "Validate that all system modifications are logged, tracked, and approved through automated infrastructure as code processes",
+    "compliance_framework": "FedRAMP-20X",
+    "control_references": ["CM-2", "CM-3", "CM-6", "AU-2"],
+    "validation_commands": [
+        "aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE",
+        "aws config describe-configuration-recorders",
+        "aws cloudtrail describe-trails"
+    ],
+    "expected_results": {
+        "cloudformation_stacks": {"min_count": 1},
+        "config_recorders": {"min_count": 1},
+        "cloudtrail_trails": {"min_count": 1, "encryption": "required"}
+    },
+    "pass_criteria": {
+        "infrastructure_as_code": true,
+        "change_tracking": true,
+        "encryption_enabled": true,
+        "logging_configured": true
+    },
+    "remediation_guidance": "Enable AWS Config, CloudTrail, and implement Infrastructure as Code with Terraform",
+    "last_updated": "2025-07-25T00:00:00Z",
+    "validator": "cmt"
+}

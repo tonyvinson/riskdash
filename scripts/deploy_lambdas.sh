@@ -1,0 +1,249 @@
+#!/bin/bash
+set -e
+
+# Riskuity KSI Validator - Lambda Deployment Script
+echo "🚀 Deploying KSI Validator Lambda Functions..."
+
+# Configuration
+PROJECT_NAME="riskuity-ksi-validator"
+ENVIRONMENT="${ENVIRONMENT:-production}"
+AWS_REGION="${AWS_REGION:-us-gov-west-1}"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Check prerequisites
+check_prerequisites() {
+    log_info "Checking prerequisites..."
+    
+    if ! command -v aws &> /dev/null; then
+        log_error "AWS CLI is not installed or not in PATH"
+        exit 1
+    fi
+    
+    if ! command -v python3 &> /dev/null; then
+        log_error "Python 3 is not installed or not in PATH"
+        exit 1
+    fi
+    
+    if ! command -v zip &> /dev/null; then
+        log_error "zip command is not available"
+        exit 1
+    fi
+    
+    # Check AWS credentials
+    if ! aws sts get-caller-identity &> /dev/null; then
+        log_error "AWS credentials not configured or invalid"
+        exit 1
+    fi
+    
+    log_success "Prerequisites check passed"
+}
+
+# Package Lambda function
+package_lambda() {
+    local lambda_dir=$1
+    local output_zip=$2
+    local function_name=$3
+    
+    log_info "Packaging $function_name..."
+    
+    # Create temporary directory
+    temp_dir=$(mktemp -d)
+    
+    # Copy function code
+    cp -r "$lambda_dir"/* "$temp_dir/"
+    
+    # Copy shared modules
+    if [ -d "shared" ]; then
+        cp -r shared "$temp_dir/"
+    fi
+    
+    # Create zip file
+    cd "$temp_dir"
+    zip -r "../$output_zip" . -q
+    cd - > /dev/null
+    
+    # Move zip to terraform directory for deployment
+    mv "$temp_dir/../$output_zip" "terraform/$output_zip"
+    
+    # Cleanup
+    rm -rf "$temp_dir"
+    
+    log_success "Packaged $function_name -> terraform/$output_zip"
+}
+
+# Package API Lambda functions
+package_api_lambdas() {
+    log_info "=== Packaging API Lambda Functions ==="
+    
+    for api_func in validate executions results; do
+        if [ -f "lambdas/api/${api_func}_handler.py" ]; then
+            # Create temporary directory for this API function
+            temp_api_dir=$(mktemp -d)
+            
+            # Copy handler with correct name for Lambda runtime
+            cp "lambdas/api/${api_func}_handler.py" "$temp_api_dir/lambda_function.py"
+            
+            # Copy shared modules if they exist
+            if [ -d "shared" ]; then
+                cp -r shared "$temp_api_dir/"
+            fi
+            
+            # Create zip file
+            cd "$temp_api_dir"
+            zip -r "../api-$api_func.zip" . -q
+            cd - > /dev/null
+            
+            # Move to terraform directory
+            mv "$temp_api_dir/../api-$api_func.zip" "terraform/api-$api_func.zip"
+            
+            # Cleanup
+            rm -rf "$temp_api_dir"
+            
+            log_success "Packaged API $api_func -> terraform/api-$api_func.zip"
+        else
+            log_warning "API $api_func handler not found at lambdas/api/${api_func}_handler.py, skipping"
+        fi
+    done
+}
+
+# Deploy Lambda code updates
+deploy_lambda_updates() {
+    log_info "=== Deploying Lambda Code Updates ==="
+    
+    # Update orchestrator if it exists
+    orchestrator_function="$PROJECT_NAME-orchestrator-$ENVIRONMENT"
+    if aws lambda get-function --function-name "$orchestrator_function" >/dev/null 2>&1; then
+        if [ -f "terraform/orchestrator.zip" ]; then
+            aws lambda update-function-code \
+                --function-name "$orchestrator_function" \
+                --zip-file "fileb://terraform/orchestrator.zip"
+            log_success "Updated orchestrator Lambda function"
+        fi
+    else
+        log_warning "Orchestrator function $orchestrator_function not found (will be created by Terraform)"
+    fi
+    
+    # Update validators
+    for validator in cna svc iam mla cmt; do
+        validator_function="$PROJECT_NAME-validator-$validator-$ENVIRONMENT"
+        if aws lambda get-function --function-name "$validator_function" >/dev/null 2>&1; then
+            if [ -f "terraform/validator-$validator.zip" ]; then
+                aws lambda update-function-code \
+                    --function-name "$validator_function" \
+                    --zip-file "fileb://terraform/validator-$validator.zip"
+                log_success "Updated validator $validator Lambda function"
+            fi
+        else
+            log_warning "Validator function $validator_function not found (will be created by Terraform)"
+        fi
+    done
+    
+    # Update API functions
+    for api_func in validate executions results; do
+        api_function="$PROJECT_NAME-api-$api_func-$ENVIRONMENT"
+        if aws lambda get-function --function-name "$api_function" >/dev/null 2>&1; then
+            if [ -f "terraform/api-$api_func.zip" ]; then
+                aws lambda update-function-code \
+                    --function-name "$api_function" \
+                    --zip-file "fileb://terraform/api-$api_func.zip"
+                log_success "Updated API $api_func Lambda function"
+            fi
+        else
+            log_warning "API function $api_function not found (will be created by Terraform)"
+        fi
+    done
+}
+
+# Package all Lambda functions
+package_all_lambdas() {
+    # Package orchestrator
+    log_info "=== Packaging Orchestrator ==="
+    if [ -d "lambdas/orchestrator" ]; then
+        package_lambda "lambdas/orchestrator" "orchestrator.zip" "ksi-orchestrator"
+    else
+        log_warning "Orchestrator directory not found at lambdas/orchestrator"
+    fi
+    
+    # Package validators
+    log_info "=== Packaging Validators ==="
+    for validator in cna svc iam mla cmt; do
+        if [ -d "lambdas/validators/ksi-validator-$validator" ]; then
+            package_lambda "lambdas/validators/ksi-validator-$validator" "validator-$validator.zip" "ksi-validator-$validator"
+        else
+            log_warning "Validator $validator directory not found at lambdas/validators/ksi-validator-$validator"
+        fi
+    done
+    
+    # Package API functions
+    package_api_lambdas
+}
+
+# Main deployment process
+main() {
+    log_info "Starting KSI Validator Lambda deployment..."
+    log_info "Project: $PROJECT_NAME"
+    log_info "Environment: $ENVIRONMENT"
+    log_info "AWS Region: $AWS_REGION"
+    
+    check_prerequisites
+    package_all_lambdas
+    
+    log_success "🎉 All Lambda functions packaged successfully!"
+    log_info ""
+    log_info "Next steps:"
+    log_info "1. Run 'cd terraform && terraform apply' to create/update infrastructure"
+    log_info "2. Run './scripts/deploy_lambdas.sh update-code' to deploy Lambda code updates"
+    log_info "3. Test API endpoints with 'terraform output quick_reference'"
+}
+
+# Handle script arguments
+case "${1:-deploy}" in
+    "deploy")
+        main
+        ;;
+    "package-only")
+        log_info "Packaging Lambda functions only..."
+        package_all_lambdas
+        log_success "All functions packaged in terraform/ directory"
+        ;;
+    "update-code")
+        log_info "Updating Lambda function code only..."
+        deploy_lambda_updates
+        log_success "Lambda function code updates completed"
+        ;;
+    "clean")
+        log_info "Cleaning up zip files..."
+        rm -f terraform/*.zip
+        log_success "Cleanup completed"
+        ;;
+    *)
+        echo "Usage: $0 [deploy|package-only|update-code|clean]"
+        echo "  deploy      - Package all Lambda functions (default)"
+        echo "  package-only - Only package functions into zip files"
+        echo "  update-code - Update existing Lambda function code"
+        echo "  clean       - Remove all zip files"
+        exit 1
+        ;;
+esac

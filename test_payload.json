@@ -1,0 +1,5 @@
+{
+    "tenant_id": "default",
+    "source": "test_script",
+    "validation_type": "manual_test"
+}

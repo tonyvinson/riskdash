@@ -1,0 +1,60 @@
+output "api_gateway_rest_api_id" {
+  description = "ID of the API Gateway REST API"
+  value       = aws_api_gateway_rest_api.ksi_api.id
+}
+
+output "api_gateway_rest_api_arn" {
+  description = "ARN of the API Gateway REST API"
+  value       = aws_api_gateway_rest_api.ksi_api.arn
+}
+
+output "api_gateway_stage_arn" {
+  description = "ARN of the API Gateway stage"
+  value       = aws_api_gateway_stage.ksi_api.arn
+}
+
+output "api_gateway_invoke_url" {
+  description = "The invoke URL for the API Gateway"
+  value       = "https://${aws_api_gateway_rest_api.ksi_api.id}.execute-api.${data.aws_region.current.id}.amazonaws.com/${var.environment}"
+}
+
+output "api_gateway_deployment_id" {
+  description = "ID of the API Gateway deployment"
+  value       = aws_api_gateway_deployment.ksi_api.id
+}
+
+output "api_lambda_function_arns" {
+  description = "ARNs of API Lambda functions"
+  value = {
+    validate   = aws_lambda_function.api_validate.arn
+    executions = aws_lambda_function.api_executions.arn
+    results    = aws_lambda_function.api_results.arn
+  }
+}
+
+output "api_lambda_function_names" {
+  description = "Names of API Lambda functions"
+  value = {
+    validate   = aws_lambda_function.api_validate.function_name
+    executions = aws_lambda_function.api_executions.function_name
+    results    = aws_lambda_function.api_results.function_name
+  }
+}
+
+output "api_endpoints" {
+  description = "Available API endpoints"
+  value = {
+    validate_url   = "https://${aws_api_gateway_rest_api.ksi_api.id}.execute-api.${data.aws_region.current.id}.amazonaws.com/${var.environment}/api/ksi/validate"
+    executions_url = "https://${aws_api_gateway_rest_api.ksi_api.id}.execute-api.${data.aws_region.current.id}.amazonaws.com/${var.environment}/api/ksi/executions"
+    results_url    = "https://${aws_api_gateway_rest_api.ksi_api.id}.execute-api.${data.aws_region.current.id}.amazonaws.com/${var.environment}/api/ksi/results"
+  }
+}
+
+output "cloudwatch_log_groups" {
+  description = "CloudWatch log groups for API components"
+  value = {
+    validate_logs   = aws_cloudwatch_log_group.api_validate_logs.name
+    executions_logs = aws_cloudwatch_log_group.api_executions_logs.name
+    results_logs    = aws_cloudwatch_log_group.api_results_logs.name
+  }
+}

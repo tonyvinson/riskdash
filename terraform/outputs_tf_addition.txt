@@ -1,0 +1,25 @@
+
+# =============================================================================
+# ADD THESE TO YOUR terraform/outputs.tf FILE:
+# =============================================================================
+
+# Tenant Management Outputs
+output "tenant_metadata_table_name" {
+  description = "Name of the tenant metadata table"
+  value       = module.tenant_management.tenant_metadata_table_name
+}
+
+output "tenant_onboarding_api_function_name" {
+  description = "Name of the tenant onboarding API function"
+  value       = module.tenant_management.tenant_onboarding_api_function_name
+}
+
+output "cross_account_validator_function_name" {
+  description = "Name of the cross-account validator function"
+  value       = module.tenant_management.cross_account_validator_function_name
+}
+
+output "riskuity_account_id" {
+  description = "Riskuity's AWS Account ID for customer role setup"
+  value       = module.tenant_management.riskuity_account_id
+}
