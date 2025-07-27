@@ -573,3 +573,386 @@ resource "aws_cloudwatch_log_group" "api_results_logs" {
     Purpose = "Lambda function logging"
   }
 }
+
+# =============================================================================
+# TENANT MANAGEMENT API ROUTES
+# =============================================================================
+
+# /api/tenant resource
+resource "aws_api_gateway_resource" "tenant" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  parent_id   = aws_api_gateway_resource.api.id
+  path_part   = "tenant"
+}
+
+# /api/tenant/generate-role-instructions resource
+resource "aws_api_gateway_resource" "tenant_generate_role" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  parent_id   = aws_api_gateway_resource.tenant.id
+  path_part   = "generate-role-instructions"
+}
+
+# /api/tenant/test-connection resource
+resource "aws_api_gateway_resource" "tenant_test_connection" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  parent_id   = aws_api_gateway_resource.tenant.id
+  path_part   = "test-connection"
+}
+
+# /api/tenant/onboard resource
+resource "aws_api_gateway_resource" "tenant_onboard" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  parent_id   = aws_api_gateway_resource.tenant.id
+  path_part   = "onboard"
+}
+
+# /api/tenant/list resource
+resource "aws_api_gateway_resource" "tenant_list" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  parent_id   = aws_api_gateway_resource.tenant.id
+  path_part   = "list"
+}
+
+# =============================================================================
+# TENANT MANAGEMENT METHODS
+# =============================================================================
+
+# POST /api/tenant/generate-role-instructions
+resource "aws_api_gateway_method" "tenant_generate_role_post" {
+  rest_api_id   = aws_api_gateway_rest_api.ksi_api.id
+  resource_id   = aws_api_gateway_resource.tenant_generate_role.id
+  http_method   = "POST"
+  authorization = "AWS_IAM"
+}
+
+# POST /api/tenant/test-connection
+resource "aws_api_gateway_method" "tenant_test_connection_post" {
+  rest_api_id   = aws_api_gateway_rest_api.ksi_api.id
+  resource_id   = aws_api_gateway_resource.tenant_test_connection.id
+  http_method   = "POST"
+  authorization = "AWS_IAM"
+}
+
+# POST /api/tenant/onboard
+resource "aws_api_gateway_method" "tenant_onboard_post" {
+  rest_api_id   = aws_api_gateway_rest_api.ksi_api.id
+  resource_id   = aws_api_gateway_resource.tenant_onboard.id
+  http_method   = "POST"
+  authorization = "AWS_IAM"
+}
+
+# GET /api/tenant/list
+resource "aws_api_gateway_method" "tenant_list_get" {
+  rest_api_id   = aws_api_gateway_rest_api.ksi_api.id
+  resource_id   = aws_api_gateway_resource.tenant_list.id
+  http_method   = "GET"
+  authorization = "AWS_IAM"
+}
+
+# =============================================================================
+# CORS OPTIONS METHODS FOR TENANT ENDPOINTS
+# =============================================================================
+
+# OPTIONS for tenant resources (CORS)
+resource "aws_api_gateway_method" "tenant_generate_role_options" {
+  rest_api_id   = aws_api_gateway_rest_api.ksi_api.id
+  resource_id   = aws_api_gateway_resource.tenant_generate_role.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_method" "tenant_test_connection_options" {
+  rest_api_id   = aws_api_gateway_rest_api.ksi_api.id
+  resource_id   = aws_api_gateway_resource.tenant_test_connection.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_method" "tenant_onboard_options" {
+  rest_api_id   = aws_api_gateway_rest_api.ksi_api.id
+  resource_id   = aws_api_gateway_resource.tenant_onboard.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_method" "tenant_list_options" {
+  rest_api_id   = aws_api_gateway_rest_api.ksi_api.id
+  resource_id   = aws_api_gateway_resource.tenant_list.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+# =============================================================================
+# LAMBDA INTEGRATIONS FOR TENANT MANAGEMENT
+# =============================================================================
+
+# Integration for generate-role-instructions
+resource "aws_api_gateway_integration" "tenant_generate_role_post" {
+  rest_api_id             = aws_api_gateway_rest_api.ksi_api.id
+  resource_id             = aws_api_gateway_resource.tenant_generate_role.id
+  http_method             = aws_api_gateway_method.tenant_generate_role_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = var.tenant_onboarding_lambda_invoke_arn
+}
+
+# Integration for test-connection
+resource "aws_api_gateway_integration" "tenant_test_connection_post" {
+  rest_api_id             = aws_api_gateway_rest_api.ksi_api.id
+  resource_id             = aws_api_gateway_resource.tenant_test_connection.id
+  http_method             = aws_api_gateway_method.tenant_test_connection_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = var.tenant_onboarding_lambda_invoke_arn
+}
+
+# Integration for onboard
+resource "aws_api_gateway_integration" "tenant_onboard_post" {
+  rest_api_id             = aws_api_gateway_rest_api.ksi_api.id
+  resource_id             = aws_api_gateway_resource.tenant_onboard.id
+  http_method             = aws_api_gateway_method.tenant_onboard_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = var.tenant_onboarding_lambda_invoke_arn
+}
+
+# Integration for list (uses tenant onboarding lambda for now)
+resource "aws_api_gateway_integration" "tenant_list_get" {
+  rest_api_id             = aws_api_gateway_rest_api.ksi_api.id
+  resource_id             = aws_api_gateway_resource.tenant_list.id
+  http_method             = aws_api_gateway_method.tenant_list_get.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = var.tenant_onboarding_lambda_invoke_arn
+}
+
+# =============================================================================
+# CORS INTEGRATIONS
+# =============================================================================
+
+# CORS integration for generate-role-instructions
+resource "aws_api_gateway_integration" "tenant_generate_role_options" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_generate_role.id
+  http_method = aws_api_gateway_method.tenant_generate_role_options.http_method
+  type        = "MOCK"
+  
+  request_templates = {
+    "application/json" = jsonencode({
+      statusCode = 200
+    })
+  }
+}
+
+# CORS integration for test-connection
+resource "aws_api_gateway_integration" "tenant_test_connection_options" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_test_connection.id
+  http_method = aws_api_gateway_method.tenant_test_connection_options.http_method
+  type        = "MOCK"
+  
+  request_templates = {
+    "application/json" = jsonencode({
+      statusCode = 200
+    })
+  }
+}
+
+# CORS integration for onboard
+resource "aws_api_gateway_integration" "tenant_onboard_options" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_onboard.id
+  http_method = aws_api_gateway_method.tenant_onboard_options.http_method
+  type        = "MOCK"
+  
+  request_templates = {
+    "application/json" = jsonencode({
+      statusCode = 200
+    })
+  }
+}
+
+# CORS integration for list
+resource "aws_api_gateway_integration" "tenant_list_options" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_list.id
+  http_method = aws_api_gateway_method.tenant_list_options.http_method
+  type        = "MOCK"
+  
+  request_templates = {
+    "application/json" = jsonencode({
+      statusCode = 200
+    })
+  }
+}
+
+# =============================================================================
+# METHOD RESPONSES
+# =============================================================================
+
+# Method responses for tenant endpoints
+resource "aws_api_gateway_method_response" "tenant_generate_role_post_200" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_generate_role.id
+  http_method = aws_api_gateway_method.tenant_generate_role_post.http_method
+  status_code = "200"
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = true
+  }
+}
+
+resource "aws_api_gateway_method_response" "tenant_test_connection_post_200" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_test_connection.id
+  http_method = aws_api_gateway_method.tenant_test_connection_post.http_method
+  status_code = "200"
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = true
+  }
+}
+
+resource "aws_api_gateway_method_response" "tenant_onboard_post_200" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_onboard.id
+  http_method = aws_api_gateway_method.tenant_onboard_post.http_method
+  status_code = "200"
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = true
+  }
+}
+
+resource "aws_api_gateway_method_response" "tenant_list_get_200" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_list.id
+  http_method = aws_api_gateway_method.tenant_list_get.http_method
+  status_code = "200"
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = true
+  }
+}
+
+# CORS method responses
+resource "aws_api_gateway_method_response" "tenant_generate_role_options_200" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_generate_role.id
+  http_method = aws_api_gateway_method.tenant_generate_role_options.http_method
+  status_code = "200"
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = true
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+  }
+}
+
+resource "aws_api_gateway_method_response" "tenant_test_connection_options_200" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_test_connection.id
+  http_method = aws_api_gateway_method.tenant_test_connection_options.http_method
+  status_code = "200"
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = true
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+  }
+}
+
+resource "aws_api_gateway_method_response" "tenant_onboard_options_200" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_onboard.id
+  http_method = aws_api_gateway_method.tenant_onboard_options.http_method
+  status_code = "200"
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = true
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+  }
+}
+
+resource "aws_api_gateway_method_response" "tenant_list_options_200" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_list.id
+  http_method = aws_api_gateway_method.tenant_list_options.http_method
+  status_code = "200"
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = true
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+  }
+}
+
+# =============================================================================
+# INTEGRATION RESPONSES
+# =============================================================================
+
+# Integration responses for CORS
+resource "aws_api_gateway_integration_response" "tenant_generate_role_options" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_generate_role.id
+  http_method = aws_api_gateway_method.tenant_generate_role_options.http_method
+  status_code = aws_api_gateway_method_response.tenant_generate_role_options_200.status_code
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+    "method.response.header.Access-Control-Allow-Methods" = "'POST,OPTIONS'"
+  }
+}
+
+resource "aws_api_gateway_integration_response" "tenant_test_connection_options" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_test_connection.id
+  http_method = aws_api_gateway_method.tenant_test_connection_options.http_method
+  status_code = aws_api_gateway_method_response.tenant_test_connection_options_200.status_code
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+    "method.response.header.Access-Control-Allow-Methods" = "'POST,OPTIONS'"
+  }
+}
+
+resource "aws_api_gateway_integration_response" "tenant_onboard_options" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_onboard.id
+  http_method = aws_api_gateway_method.tenant_onboard_options.http_method
+  status_code = aws_api_gateway_method_response.tenant_onboard_options_200.status_code
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+    "method.response.header.Access-Control-Allow-Methods" = "'POST,OPTIONS'"
+  }
+}
+
+resource "aws_api_gateway_integration_response" "tenant_list_options" {
+  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
+  resource_id = aws_api_gateway_resource.tenant_list.id
+  http_method = aws_api_gateway_method.tenant_list_options.http_method
+  status_code = aws_api_gateway_method_response.tenant_list_options_200.status_code
+  
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+    "method.response.header.Access-Control-Allow-Methods" = "'GET,OPTIONS'"
+  }
+}
+
+# =============================================================================
+# LAMBDA PERMISSIONS FOR TENANT MANAGEMENT
+# =============================================================================
+
+resource "aws_lambda_permission" "api_tenant_onboarding" {
+  statement_id  = "AllowExecutionFromAPIGateway"
+  action        = "lambda:InvokeFunction"
+  function_name = var.tenant_onboarding_lambda_function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.ksi_api.execution_arn}/*/*"
+}

@@ -78,3 +78,14 @@ variable "api_throttling_burst_limit" {
   type        = number
   default     = 2000
 }
+
+# Tenant Management Lambda variables
+variable "tenant_onboarding_lambda_function_name" {
+  description = "Name of the tenant onboarding Lambda function"
+  type        = string
+}
+
+variable "tenant_onboarding_lambda_invoke_arn" {
+  description = "Invoke ARN of the tenant onboarding Lambda function"
+  type        = string
+}

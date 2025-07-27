@@ -58,3 +58,14 @@ output "cloudwatch_log_groups" {
     results_logs    = aws_cloudwatch_log_group.api_results_logs.name
   }
 }
+
+# Tenant Management API endpoints
+output "tenant_api_endpoints" {
+  description = "Tenant management API endpoints"
+  value = {
+    generate_role_instructions = "${local.api_base_url}/api/tenant/generate-role-instructions"
+    test_connection           = "${local.api_base_url}/api/tenant/test-connection"
+    onboard                   = "${local.api_base_url}/api/tenant/onboard"
+    list                      = "${local.api_base_url}/api/tenant/list"
+  }
+}

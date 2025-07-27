@@ -74,6 +74,8 @@ module "api_gateway" {
   
   environment  = var.environment
   project_name = var.project_name
+  tenant_onboarding_lambda_function_name = module.tenant_management.tenant_onboarding_api_function_name
+  tenant_onboarding_lambda_invoke_arn    = module.tenant_management.tenant_onboarding_api_function_arn
   
   # Lambda integrations
   orchestrator_lambda_arn = module.lambda.orchestrator_lambda_arn

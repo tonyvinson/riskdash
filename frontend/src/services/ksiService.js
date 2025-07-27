@@ -1,4 +1,4 @@
-// frontend/src/services/ksiService.js
+// frontend/src/services/ksiService.js - Enhanced with Tenant Management
 import axios from 'axios';
 
 // API Configuration
@@ -117,11 +117,67 @@ export const ksiService = {
   },
 
   /**
+   * Get available tenants with metadata
+   */
+  getTenants: async () => {
+    try {
+      const response = await apiClient.get('/api/tenant/list');
+      return response.data;
+    } catch (error) {
+      throw new Error(`Failed to fetch tenants: ${error.message}`);
+    }
+  },
+
+  /**
+   * Generate IAM role setup instructions for new tenant
+   */
+  generateRoleInstructions: async (tenantData) => {
+    try {
+      const response = await apiClient.post('/api/tenant/generate-role-instructions', {
+        action: 'generate_role_instructions',
+        ...tenantData
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(`Failed to generate role instructions: ${error.message}`);
+    }
+  },
+
+  /**
+   * Test connection to customer AWS account
+   */
+  testTenantConnection: async (roleArn, externalId) => {
+    try {
+      const response = await apiClient.post('/api/tenant/test-connection', {
+        action: 'test_connection',
+        roleArn,
+        externalId
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(`Failed to test connection: ${error.message}`);
+    }
+  },
+
+  /**
+   * Complete tenant onboarding
+   */
+  onboardTenant: async (tenantData) => {
+    try {
+      const response = await apiClient.post('/api/tenant/onboard', {
+        action: 'onboard',
+        ...tenantData
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(`Failed to onboard tenant: ${error.message}`);
+    }
+  },
+
+  /**
    * Get KSI definitions (for reference)
    */
   getKSIDefinitions: async () => {
-    // Note: This would need a separate API endpoint if you want to expose KSI definitions
-    // For now, we return the categories we know about
     return {
       categories: {
         'CNA': 'Configuration & Network Architecture',
@@ -138,7 +194,6 @@ export const ksiService = {
    */
   testConnection: async () => {
     try {
-      // Simple test by calling executions endpoint with minimal params
       await apiClient.get('/api/ksi/executions?limit=1');
       return {
         status: 'connected',
@@ -149,13 +204,6 @@ export const ksiService = {
       throw new Error(`API connection test failed: ${error.message}`);
     }
   }
-};
-
-// Export API configuration for reference
-export const API_ENDPOINTS = {
-  validate: '/api/ksi/validate',
-  executions: '/api/ksi/executions', 
-  results: '/api/ksi/results'
 };
 
 export default ksiService;

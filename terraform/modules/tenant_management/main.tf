@@ -1,5 +1,14 @@
 # Tenant Management Module - integrates with existing KSI Validator architecture
 
+# Get current AWS account info and region
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+# Determine the correct partition based on region
+locals {
+  aws_partition = startswith(data.aws_region.current.name, "us-gov-") ? "aws-us-gov" : "aws"
+}
+
 # Tenant Metadata Table - NEW for SaaS functionality
 resource "aws_dynamodb_table" "tenant_metadata" {
   name           = "${var.project_name}-tenant-metadata-${var.environment}"
@@ -97,7 +106,7 @@ resource "aws_iam_policy" "tenant_metadata_policy" {
   })
 }
 
-# IAM Policy for Cross-Account Role Assumption
+# IAM Policy for Cross-Account Role Assumption - FIXED FOR GOVCLOUD
 resource "aws_iam_policy" "cross_account_assume_policy" {
   name        = "${var.project_name}-cross-account-assume-policy-${var.environment}"
   description = "Policy for assuming roles in customer accounts"
@@ -110,7 +119,7 @@ resource "aws_iam_policy" "cross_account_assume_policy" {
         Action = [
           "sts:AssumeRole"
         ]
-        Resource = "arn:aws:iam::*:role/RiskuityKSIValidatorRole"
+        Resource = "arn:${local.aws_partition}:iam::*:role/RiskuityKSIValidatorRole"
         Condition = {
           StringEquals = {
             "sts:ExternalId" = "riskuity-*"
@@ -124,7 +133,7 @@ resource "aws_iam_policy" "cross_account_assume_policy" {
 # Attach policies to tenant onboarding role
 resource "aws_iam_role_policy_attachment" "tenant_onboarding_basic" {
   role       = aws_iam_role.tenant_onboarding_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  policy_arn = "arn:${local.aws_partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
 resource "aws_iam_role_policy_attachment" "tenant_onboarding_metadata" {
@@ -166,6 +175,29 @@ resource "aws_lambda_function" "tenant_onboarding_api" {
   depends_on = [aws_iam_role_policy_attachment.tenant_onboarding_basic]
 }
 
+# IAM Role for Cross-Account KSI Validator
+resource "aws_iam_role" "cross_account_validator_role" {
+  name = "${var.project_name}-cross-account-validator-role-${var.environment}"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+  
+  tags = {
+    Name = "Cross-Account Validator Role"
+    Purpose = "Lambda execution role for cross-account KSI validation"
+  }
+}
+
 # Enhanced Cross-Account KSI Validator
 resource "aws_lambda_function" "cross_account_ksi_validator" {
   filename         = "${path.module}/../../lambda_packages/cross_account_ksi_validator.zip"
@@ -196,33 +228,10 @@ resource "aws_lambda_function" "cross_account_ksi_validator" {
   depends_on = [aws_iam_role_policy_attachment.cross_account_validator_basic]
 }
 
-# IAM Role for Cross-Account KSI Validator
-resource "aws_iam_role" "cross_account_validator_role" {
-  name = "${var.project_name}-cross-account-validator-role-${var.environment}"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        }
-      }
-    ]
-  })
-  
-  tags = {
-    Name = "Cross-Account Validator Role"
-    Purpose = "Lambda execution role for cross-account KSI validation"
-  }
-}
-
 # Attach policies to cross-account validator role
 resource "aws_iam_role_policy_attachment" "cross_account_validator_basic" {
   role       = aws_iam_role.cross_account_validator_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  policy_arn = "arn:${local.aws_partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
 resource "aws_iam_role_policy_attachment" "cross_account_validator_metadata" {
@@ -266,6 +275,3 @@ resource "aws_lambda_permission" "allow_eventbridge_cross_account" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.scheduled_multi_tenant_validation.arn
 }
-
-# Data source for current AWS account ID
-data "aws_caller_identity" "current" {}

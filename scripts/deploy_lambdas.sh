@@ -128,6 +128,25 @@ package_api_lambdas() {
     done
 }
 
+# Package Tenant Management Lambda functions
+package_tenant_management_lambdas() {
+    log_info "=== Packaging Tenant Management Functions ==="
+    
+    # Package tenant onboarding API
+    if [ -d "lambdas/tenant_onboarding" ]; then
+        package_lambda "lambdas/tenant_onboarding" "tenant_onboarding_api.zip" "tenant-onboarding-api"
+    else
+        log_warning "Tenant onboarding directory not found at lambdas/tenant_onboarding"
+    fi
+    
+    # Package cross-account validator
+    if [ -d "lambdas/cross_account_validator" ]; then
+        package_lambda "lambdas/cross_account_validator" "cross_account_ksi_validator.zip" "cross-account-validator"
+    else
+        log_warning "Cross-account validator directory not found at lambdas/cross_account_validator"
+    fi
+}
+
 # Deploy Lambda code updates
 deploy_lambda_updates() {
     log_info "=== Deploying Lambda Code Updates ==="
@@ -174,6 +193,31 @@ deploy_lambda_updates() {
             log_warning "API function $api_function not found (will be created by Terraform)"
         fi
     done
+    
+    # Update tenant management functions
+    tenant_onboarding_function="$PROJECT_NAME-tenant-onboarding-api-$ENVIRONMENT"
+    if aws lambda get-function --function-name "$tenant_onboarding_function" >/dev/null 2>&1; then
+        if [ -f "terraform/tenant_onboarding_api.zip" ]; then
+            aws lambda update-function-code \
+                --function-name "$tenant_onboarding_function" \
+                --zip-file "fileb://terraform/tenant_onboarding_api.zip"
+            log_success "Updated tenant onboarding API Lambda function"
+        fi
+    else
+        log_warning "Tenant onboarding function $tenant_onboarding_function not found (will be created by Terraform)"
+    fi
+    
+    cross_account_function="$PROJECT_NAME-cross-account-validator-$ENVIRONMENT"
+    if aws lambda get-function --function-name "$cross_account_function" >/dev/null 2>&1; then
+        if [ -f "terraform/cross_account_ksi_validator.zip" ]; then
+            aws lambda update-function-code \
+                --function-name "$cross_account_function" \
+                --zip-file "fileb://terraform/cross_account_ksi_validator.zip"
+            log_success "Updated cross-account validator Lambda function"
+        fi
+    else
+        log_warning "Cross-account validator function $cross_account_function not found (will be created by Terraform)"
+    fi
 }
 
 # Package all Lambda functions
@@ -198,6 +242,9 @@ package_all_lambdas() {
     
     # Package API functions
     package_api_lambdas
+    
+    # Package tenant management functions
+    package_tenant_management_lambdas
 }
 
 # Main deployment process
