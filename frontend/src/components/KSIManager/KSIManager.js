@@ -1,23 +1,104 @@
-// frontend/src/components/KSIManager/KSIManager.js - Enhanced with CLI Commands Display
+// frontend/src/components/KSIManager/KSIManager.js - Enterprise Edition with Dynamic Tenants & Rich AWS Data Display
 import React, { useState, useEffect, useCallback } from 'react';
 import { ksiService } from '../../services/ksiService';
 
 const KSIManager = () => {
     const [loading, setLoading] = useState(false);
-    const [selectedTenant, setSelectedTenant] = useState('default');
+    const [selectedTenant, setSelectedTenant] = useState('real-test');
+    const [availableTenants, setAvailableTenants] = useState([]);
+    const [tenantsLoading, setTenantsLoading] = useState(false);
     const [executionHistory, setExecutionHistory] = useState([]);
     const [validationResults, setValidationResults] = useState([]);
     const [error, setError] = useState(null);
     const [lastExecution, setLastExecution] = useState(null);
     const [selectedExecutionId, setSelectedExecutionId] = useState(null);
+    const [complianceOverview, setComplianceOverview] = useState(null);
 
     // KSI categories for display
     const ksiCategories = {
-        'CNA': 'Configuration & Network Architecture',
-        'SVC': 'Service Configuration',
-        'IAM': 'Identity & Access Management', 
-        'MLA': 'Monitoring, Logging & Alerting',
-        'CMT': 'Configuration Management & Tracking'
+        'CNA': { name: 'Configuration & Network Architecture', icon: '🏗️', color: 'blue' },
+        'SVC': { name: 'Service Configuration', icon: '⚙️', color: 'green' },
+        'IAM': { name: 'Identity & Access Management', icon: '🔐', color: 'purple' }, 
+        'MLA': { name: 'Monitoring, Logging & Alerting', icon: '📊', color: 'orange' },
+        'CMT': { name: 'Configuration Management & Tracking', icon: '📋', color: 'indigo' }
+    };
+
+    // Load available tenants from API
+    const loadTenants = useCallback(async () => {
+        try {
+            setTenantsLoading(true);
+            setError(null);
+            
+            console.log('🏢 Loading tenants from API...');
+            
+            // Call the tenants endpoint (you'll need to add this to ksiService)
+            const response = await fetch(`${process.env.REACT_APP_API_URL || 'https://d5804hjt80.execute-api.us-gov-west-1.amazonaws.com/production'}/api/ksi/tenants`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const data = await response.json();
+            console.log('🏢 Tenants loaded:', data);
+            
+            // Extract tenant list from response
+            const tenants = data.tenants || data.items || [];
+            
+            // Format tenants for dropdown
+            const formattedTenants = tenants.map(tenant => ({
+                id: tenant.tenant_id || tenant.id,
+                name: tenant.organization_name || tenant.name || formatTenantName(tenant.tenant_id || tenant.id),
+                ksiCount: tenant.ksi_count || 0,
+                status: tenant.status || 'active'
+            }));
+            
+            // Add "All Tenants" option and fallback
+            const allTenantsOption = {
+                id: 'all',
+                name: 'All Tenants',
+                ksiCount: formattedTenants.reduce((sum, t) => sum + t.ksiCount, 0),
+                status: 'active'
+            };
+            
+            if (formattedTenants.length === 0) {
+                // Fallback if API fails or no tenants
+                setAvailableTenants([
+                    { id: 'real-test', name: 'Real Test Tenant', ksiCount: 5, status: 'active' },
+                    allTenantsOption
+                ]);
+            } else {
+                setAvailableTenants([allTenantsOption, ...formattedTenants]);
+            }
+            
+            console.log(`✅ Loaded ${formattedTenants.length} tenants`);
+            
+        } catch (err) {
+            console.error('❌ Error loading tenants:', err);
+            setError(`Failed to load tenants: ${err.message}`);
+            
+            // Fallback to default tenant if API fails
+            setAvailableTenants([
+                { id: 'real-test', name: 'Real Test Tenant', ksiCount: 5, status: 'active' },
+                { id: 'all', name: 'All Tenants', ksiCount: 5, status: 'active' }
+            ]);
+        } finally {
+            setTenantsLoading(false);
+        }
+    }, []);
+
+    // Format tenant names for better display
+    const formatTenantName = (tenantId) => {
+        if (tenantId === 'all') return 'All Tenants';
+        if (tenantId === 'default') return 'Default Tenant';
+        if (tenantId === 'real-test') return 'Real Test Tenant';
+        
+        // Convert tenant-001 to "Tenant 001"
+        return tenantId.replace(/[-_]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
     };
 
     const fetchExecutionHistory = useCallback(async () => {
@@ -37,9 +118,17 @@ const KSIManager = () => {
         }
     }, [selectedTenant]);
 
+    // Load tenants on component mount
     useEffect(() => {
-        fetchExecutionHistory();
-    }, [fetchExecutionHistory]);
+        loadTenants();
+    }, [loadTenants]);
+
+    // Load execution history when selected tenant changes
+    useEffect(() => {
+        if (selectedTenant && availableTenants.length > 0) {
+            fetchExecutionHistory();
+        }
+    }, [selectedTenant, availableTenants.length, fetchExecutionHistory]);
 
     const fetchValidationResults = async (executionId) => {
         try {
@@ -55,7 +144,7 @@ const KSIManager = () => {
             if (execution && execution.validation_results) {
                 console.log('🎯 Found validation results in execution data:', execution.validation_results);
                 
-                // Parse the nested validation results
+                // Parse the nested validation results with rich AWS data
                 const resultsData = execution.validation_results.map(validationResult => {
                     let resultBody = validationResult.result?.body;
                     let parsedBody = null;
@@ -87,6 +176,9 @@ const KSIManager = () => {
                 
                 console.log('📊 Processed Results Data:', resultsData);
                 setValidationResults(resultsData);
+                
+                // Calculate compliance overview
+                calculateComplianceOverview(resultsData);
             } else {
                 // Try to fetch from API if not in current data
                 const response = await ksiService.getValidationResults(selectedTenant, executionId);
@@ -108,49 +200,102 @@ const KSIManager = () => {
         }
     };
 
-    const parseCliCommand = (cliCommand) => {
-        if (!cliCommand || cliCommand === 'No command information') {
-            return { summary: 'No commands', commands: [] };
-        }
+    const calculateComplianceOverview = (results) => {
+        if (!results || results.length === 0) return;
 
-        // Parse command string like "4 commands (3 successful): aws iam list-users --output json; aws iam list-mfa-devices --output json (+2 more)"
-        const match = cliCommand.match(/(\d+) commands \((\d+) successful\): (.+)/);
-        if (match) {
-            const [, total, successful, commandsStr] = match;
-            const commands = commandsStr.split(';').map(cmd => cmd.trim());
-            
-            return {
-                total: parseInt(total),
-                successful: parseInt(successful),
-                failed: parseInt(total) - parseInt(successful),
-                commands: commands
-            };
-        }
-
-        // Handle single command case or different format
-        return {
-            summary: cliCommand,
-            commands: [cliCommand]
+        const overview = {
+            totalValidators: results.length,
+            passedValidators: 0,
+            totalKSIs: 0,
+            passedKSIs: 0,
+            awsResources: {
+                subnets: 0,
+                availabilityZones: [],
+                kmsKeys: 0,
+                iamUsers: 0,
+                iamRoles: 0,
+                cloudwatchAlarms: 0,
+                cloudtrailTrails: 0,
+                hostedZones: 0,
+                cloudformationStacks: 0
+            },
+            categoryResults: {}
         };
+
+        results.forEach(result => {
+            if (result.status === 'SUCCESS' && result.details?.statusCode === 200) {
+                overview.passedValidators++;
+            }
+
+            if (result.summary) {
+                overview.totalKSIs += result.summary.total_ksis || 0;
+                overview.passedKSIs += result.summary.passed || 0;
+            }
+
+            // Extract AWS resource counts from individual results
+            if (result.individual_results) {
+                result.individual_results.forEach(ksi => {
+                    if (ksi.cli_command_details) {
+                        ksi.cli_command_details.forEach(cmd => {
+                            if (cmd.data) {
+                                // Extract resource counts based on command type
+                                if (cmd.command.includes('describe_subnets')) {
+                                    overview.awsResources.subnets = cmd.data.subnet_count || 0;
+                                    if (cmd.data.availability_zones) {
+                                        overview.awsResources.availabilityZones = cmd.data.availability_zones;
+                                    }
+                                }
+                                if (cmd.command.includes('list_keys')) {
+                                    overview.awsResources.kmsKeys = cmd.data.key_count || 0;
+                                }
+                                if (cmd.command.includes('list_users')) {
+                                    overview.awsResources.iamUsers = cmd.data.user_count || 0;
+                                }
+                                if (cmd.command.includes('list_roles')) {
+                                    overview.awsResources.iamRoles = cmd.data.role_count || 0;
+                                }
+                                if (cmd.command.includes('describe_alarms')) {
+                                    overview.awsResources.cloudwatchAlarms = cmd.data.alarm_count || 0;
+                                }
+                                if (cmd.command.includes('describe_trails')) {
+                                    overview.awsResources.cloudtrailTrails = cmd.data.trail_count || 0;
+                                }
+                                if (cmd.command.includes('list_hosted_zones')) {
+                                    overview.awsResources.hostedZones = cmd.data.hosted_zones || 0;
+                                }
+                                if (cmd.command.includes('list_stacks')) {
+                                    overview.awsResources.cloudformationStacks = cmd.data.stack_count || 0;
+                                }
+                            }
+                        });
+                    }
+                });
+            }
+
+            overview.categoryResults[result.validator] = result;
+        });
+
+        overview.validatorPassRate = overview.totalValidators > 0 ? 
+            Math.round((overview.passedValidators / overview.totalValidators) * 100) : 0;
+        overview.ksiPassRate = overview.totalKSIs > 0 ? 
+            Math.round((overview.passedKSIs / overview.totalKSIs) * 100) : 0;
+
+        setComplianceOverview(overview);
     };
 
     const triggerValidation = async () => {
         try {
             setLoading(true);
             setError(null);
+            setValidationResults([]);
+            setComplianceOverview(null);
             
-            console.log(`Triggering validation for tenant: ${selectedTenant}`);
+            console.log(`🚀 Triggering validation for tenant: ${selectedTenant}`);
             
-            const response = await ksiService.triggerValidation(
-                selectedTenant, 
-                'manual'
-            );
-            
+            const response = await ksiService.triggerValidation(selectedTenant, 'manual');
             console.log('Validation Triggered:', response);
-            setLastExecution(response);
             
-            // Show success message
-            alert(`✅ KSI validation triggered successfully!\nExecution ID: ${response.execution_id}`);
+            setLastExecution(response);
             
             // Refresh execution history after a brief delay
             setTimeout(() => {
@@ -160,7 +305,6 @@ const KSIManager = () => {
         } catch (err) {
             console.error('Error triggering validation:', err);
             setError(`Failed to trigger validation: ${err.message}`);
-            alert(`❌ Failed to trigger validation: ${err.message}`);
         } finally {
             setLoading(false);
         }
@@ -189,53 +333,79 @@ const KSIManager = () => {
     const closeResults = () => {
         setValidationResults([]);
         setSelectedExecutionId(null);
+        setComplianceOverview(null);
     };
 
     return (
         <div className="max-w-7xl mx-auto p-6 space-y-6">
             {/* Header */}
-            <div className="bg-white shadow rounded-lg p-6">
+            <div className="bg-gradient-to-r from-blue-600 to-blue-800 rounded-lg shadow-lg p-6 text-white">
                 <div className="flex justify-between items-center">
                     <div>
-                        <h1 className="text-3xl font-bold text-gray-900">
-                            KSI Validator Dashboard
+                        <h1 className="text-3xl font-bold">
+                            🛡️ Enterprise KSI Validator
                         </h1>
-                        <p className="mt-1 text-sm text-gray-500">
+                        <p className="mt-1 text-sm text-blue-100">
                             FedRAMP 20x Key Security Indicator Validation Platform
                         </p>
                     </div>
                     <div className="text-right">
-                        <div className="text-sm text-gray-500">Environment</div>
-                        <div className="font-semibold text-blue-600">
+                        <div className="text-sm text-blue-200">Environment</div>
+                        <div className="font-semibold text-white">
                             {process.env.REACT_APP_ENVIRONMENT || 'development'}
                         </div>
                     </div>
                 </div>
             </div>
 
+            {/* Error Display */}
+            {error && (
+                <div className="bg-red-50 border border-red-200 rounded-md p-4">
+                    <div className="flex">
+                        <div className="text-red-400">⚠️</div>
+                        <div className="ml-3">
+                            <h3 className="text-sm font-medium text-red-800">Error</h3>
+                            <div className="mt-1 text-sm text-red-700">{error}</div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Controls */}
             <div className="bg-white shadow rounded-lg p-6">
                 <div className="flex flex-wrap items-center gap-4">
-                    <div className="flex-1 min-w-48">
+                    <div className="flex-1 min-w-64">
                         <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Tenant ID
+                            Tenant ID {tenantsLoading && <span className="text-blue-500">(Loading...)</span>}
                         </label>
-                        <select
-                            value={selectedTenant}
-                            onChange={(e) => setSelectedTenant(e.target.value)}
-                            className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
-                        >
-                            <option value="default">Default Tenant</option>
-                            <option value="tenant-001">Tenant 001</option>
-                            <option value="tenant-002">Tenant 002</option>
-                            <option value="all">All Tenants</option>
-                        </select>
+                        <div className="flex gap-2">
+                            <select
+                                value={selectedTenant}
+                                onChange={(e) => setSelectedTenant(e.target.value)}
+                                disabled={tenantsLoading}
+                                className="flex-1 p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                            >
+                                {availableTenants.map((tenant) => (
+                                    <option key={tenant.id} value={tenant.id}>
+                                        {tenant.name} {tenant.ksiCount > 0 && `(${tenant.ksiCount} KSIs)`}
+                                    </option>
+                                ))}
+                            </select>
+                            <button
+                                onClick={loadTenants}
+                                disabled={tenantsLoading}
+                                className="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 disabled:bg-gray-100"
+                                title="Reload tenant list"
+                            >
+                                🔄
+                            </button>
+                        </div>
                     </div>
                     
                     <div className="flex gap-2">
                         <button
                             onClick={triggerValidation}
-                            disabled={loading}
+                            disabled={loading || tenantsLoading}
                             className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-6 py-2 rounded-md font-medium transition-colors"
                         >
                             {loading ? 'Triggering...' : '🔍 Trigger Validation'}
@@ -243,50 +413,85 @@ const KSIManager = () => {
                         
                         <button
                             onClick={fetchExecutionHistory}
-                            disabled={loading}
+                            disabled={loading || tenantsLoading}
                             className="bg-gray-600 hover:bg-gray-700 disabled:bg-gray-400 text-white px-6 py-2 rounded-md font-medium transition-colors"
                         >
-                            {loading ? 'Refreshing...' : '🔄 Refresh'}
+                            {loading ? 'Loading...' : '📊 Refresh History'}
                         </button>
                     </div>
                 </div>
+
+                {lastExecution && (
+                    <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-md">
+                        <h4 className="font-medium text-blue-900">Last Execution</h4>
+                        <p className="text-sm text-blue-700">
+                            Execution ID: {lastExecution.execution_id} | 
+                            Status: {lastExecution.status} | 
+                            Validators: {lastExecution.validators_invoked?.join(', ') || 'N/A'}
+                        </p>
+                    </div>
+                )}
             </div>
 
-            {/* Error Display */}
-            {error && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                    <div className="flex">
-                        <div className="flex-shrink-0">
-                            <span className="text-red-400">❌</span>
+            {/* Compliance Overview Dashboard */}
+            {complianceOverview && (
+                <div className="bg-white shadow rounded-lg p-6">
+                    <h2 className="text-xl font-semibold text-gray-900 mb-6">
+                        🏆 Compliance Overview
+                    </h2>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+                        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                            <div className="text-2xl font-bold text-green-600">{complianceOverview.validatorPassRate}%</div>
+                            <div className="text-sm text-green-700">Validator Success Rate</div>
+                            <div className="text-xs text-green-600">{complianceOverview.passedValidators}/{complianceOverview.totalValidators} validators</div>
                         </div>
-                        <div className="ml-3">
-                            <h3 className="text-sm font-medium text-red-800">Error</h3>
-                            <div className="mt-2 text-sm text-red-700">{error}</div>
+                        
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                            <div className="text-2xl font-bold text-blue-600">{complianceOverview.ksiPassRate}%</div>
+                            <div className="text-sm text-blue-700">KSI Pass Rate</div>
+                            <div className="text-xs text-blue-600">{complianceOverview.passedKSIs}/{complianceOverview.totalKSIs} KSIs</div>
                         </div>
-                        <div className="ml-auto pl-3">
-                            <button
-                                onClick={() => setError(null)}
-                                className="text-red-400 hover:text-red-600"
-                            >
-                                ✕
-                            </button>
+                        
+                        <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                            <div className="text-2xl font-bold text-purple-600">{complianceOverview.awsResources.availabilityZones?.length || 0}</div>
+                            <div className="text-sm text-purple-700">Availability Zones</div>
+                            <div className="text-xs text-purple-600">Multi-AZ deployment</div>
+                        </div>
+                        
+                        <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                            <div className="text-2xl font-bold text-orange-600">{Object.values(complianceOverview.awsResources).reduce((sum, val) => typeof val === 'number' ? sum + val : sum, 0)}</div>
+                            <div className="text-sm text-orange-700">Total AWS Resources</div>
+                            <div className="text-xs text-orange-600">Scanned & validated</div>
                         </div>
                     </div>
-                </div>
-            )}
 
-            {/* Last Execution Info */}
-            {lastExecution && (
-                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                    <div className="flex items-center">
-                        <span className="text-green-400 mr-3">✅</span>
-                        <div>
-                            <h3 className="text-sm font-medium text-green-800">
-                                Validation Triggered Successfully
-                            </h3>
-                            <p className="text-sm text-green-700">
-                                Execution ID: <code className="bg-green-100 px-1 rounded">{lastExecution.execution_id}</code>
-                            </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <div className="bg-gray-50 rounded-lg p-4">
+                            <h4 className="font-medium text-gray-900 mb-2">🏗️ Network Architecture</h4>
+                            <div className="space-y-1 text-sm">
+                                <div>Subnets: <span className="font-semibold">{complianceOverview.awsResources.subnets}</span></div>
+                                <div>Availability Zones: <span className="font-semibold">{complianceOverview.awsResources.availabilityZones?.length || 0}</span></div>
+                                <div>Hosted Zones: <span className="font-semibold">{complianceOverview.awsResources.hostedZones}</span></div>
+                            </div>
+                        </div>
+                        
+                        <div className="bg-gray-50 rounded-lg p-4">
+                            <h4 className="font-medium text-gray-900 mb-2">🔐 Security & Identity</h4>
+                            <div className="space-y-1 text-sm">
+                                <div>KMS Keys: <span className="font-semibold">{complianceOverview.awsResources.kmsKeys}</span></div>
+                                <div>IAM Users: <span className="font-semibold">{complianceOverview.awsResources.iamUsers}</span></div>
+                                <div>IAM Roles: <span className="font-semibold">{complianceOverview.awsResources.iamRoles}</span></div>
+                            </div>
+                        </div>
+                        
+                        <div className="bg-gray-50 rounded-lg p-4">
+                            <h4 className="font-medium text-gray-900 mb-2">📊 Monitoring & Management</h4>
+                            <div className="space-y-1 text-sm">
+                                <div>CloudWatch Alarms: <span className="font-semibold">{complianceOverview.awsResources.cloudwatchAlarms}</span></div>
+                                <div>CloudTrail Trails: <span className="font-semibold">{complianceOverview.awsResources.cloudtrailTrails}</span></div>
+                                <div>CloudFormation Stacks: <span className="font-semibold">{complianceOverview.awsResources.cloudformationStacks}</span></div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -295,108 +500,94 @@ const KSIManager = () => {
             {/* KSI Categories Overview */}
             <div className="bg-white shadow rounded-lg p-6">
                 <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                    KSI Categories
+                    📋 KSI Categories
                 </h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {Object.entries(ksiCategories).map(([code, name]) => (
-                        <div key={code} className="border border-gray-200 rounded-lg p-4">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <div className="font-semibold text-lg text-blue-600">{code}</div>
-                                    <div className="text-sm text-gray-600">{name}</div>
+                    {Object.entries(ksiCategories).map(([code, info]) => {
+                        const result = complianceOverview?.categoryResults[code.toLowerCase()];
+                        const isWorking = result && result.status === 'SUCCESS' && result.details?.statusCode === 200;
+                        
+                        return (
+                            <div key={code} className={`border rounded-lg p-4 ${isWorking ? 'border-green-200 bg-green-50' : 'border-gray-200'}`}>
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <div className="font-semibold text-lg text-blue-600">{code}</div>
+                                        <div className="text-sm text-gray-600">{info.name}</div>
+                                        {result && (
+                                            <div className="text-xs mt-1">
+                                                <span className={`px-2 py-1 rounded-full ${isWorking ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                                    {isWorking ? '✅ Active' : '❌ Issue'}
+                                                </span>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="text-2xl">{info.icon}</div>
                                 </div>
-                                <div className="text-2xl">🔒</div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             </div>
 
             {/* Execution History */}
             <div className="bg-white shadow rounded-lg p-6">
                 <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                    Execution History
+                    📈 Execution History
                 </h2>
                 
                 {loading && executionHistory.length === 0 ? (
-                    <div className="text-center py-8">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
-                        <p className="mt-2 text-gray-500">Loading execution history...</p>
+                    <div className="text-center py-8 text-gray-500">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"></div>
+                        Loading execution history...
                     </div>
                 ) : executionHistory.length === 0 ? (
-                    <div className="text-center py-8">
-                        <div className="text-gray-400 text-4xl mb-2">📊</div>
-                        <p className="text-gray-500">No execution history found</p>
-                        <p className="text-sm text-gray-400">Trigger a validation to see results here</p>
+                    <div className="text-center py-8 text-gray-500">
+                        No execution history found for this tenant.
                     </div>
                 ) : (
-                    <div className="overflow-x-auto">
-                        <table className="min-w-full divide-y divide-gray-200">
-                            <thead className="bg-gray-50">
-                                <tr>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        Execution ID
-                                    </th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        Tenant
-                                    </th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        Status
-                                    </th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        Timestamp
-                                    </th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        KSIs
-                                    </th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        Actions
-                                    </th>
-                                </tr>
-                            </thead>
-                            <tbody className="bg-white divide-y divide-gray-200">
-                                {executionHistory.map((execution, index) => (
-                                    <tr key={execution.execution_id || index} className="hover:bg-gray-50">
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900">
-                                            {execution.execution_id ? execution.execution_id.substring(0, 8) + '...' : `exec-${index}`}
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                            {execution.tenant_id || 'Unknown'}
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap">
-                                            <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(execution.status)}`}>
-                                                {execution.status || 'Unknown'}
-                                            </span>
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                            {formatTimestamp(execution.timestamp || execution.start_time)}
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                            {execution.total_ksis_validated || 0}
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                            <button
-                                                onClick={() => fetchValidationResults(execution.execution_id)}
-                                                className="text-blue-600 hover:text-blue-900"
-                                                disabled={loading}
-                                            >
-                                                {loading && selectedExecutionId === execution.execution_id ? 'Loading...' : 'View Results'}
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                    <div className="space-y-3 max-h-96 overflow-y-auto">
+                        {executionHistory.map((execution, index) => (
+                            <div
+                                key={execution.execution_id || index}
+                                className={`p-3 border rounded-md cursor-pointer transition-colors ${
+                                    selectedExecutionId === execution.execution_id
+                                        ? 'border-blue-500 bg-blue-50'
+                                        : 'border-gray-200 hover:border-gray-300'
+                                }`}
+                                onClick={() => fetchValidationResults(execution.execution_id)}
+                            >
+                                <div className="flex justify-between items-start">
+                                    <div className="flex-1">
+                                        <div className="text-sm font-medium text-gray-900">
+                                            {execution.execution_id || 'Unknown ID'}
+                                        </div>
+                                        <div className="text-xs text-gray-500 mt-1">
+                                            {execution.timestamp || execution.started_at || 'No timestamp'}
+                                        </div>
+                                        {execution.validators_invoked && (
+                                            <div className="text-xs text-gray-600 mt-1">
+                                                Validators: {execution.validators_invoked.join(', ')}
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="ml-2">
+                                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${getStatusColor(execution.status)}`}>
+                                            {execution.status}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 )}
             </div>
 
-            {/* Validation Results */}
+            {/* Validation Results - Enhanced for Rich AWS Data */}
             {validationResults.length > 0 && (
                 <div className="bg-white shadow rounded-lg p-6">
                     <div className="flex justify-between items-center mb-4">
                         <h2 className="text-xl font-semibold text-gray-900">
-                            Validation Results for Execution: {selectedExecutionId?.substring(0, 8)}...
+                            🔍 Validation Results for Execution: {selectedExecutionId?.substring(0, 8)}...
                         </h2>
                         <button
                             onClick={closeResults}
@@ -422,7 +613,7 @@ const KSIManager = () => {
                                     </span>
                                 </div>
 
-                                {/* Summary */}
+                                {/* Enhanced Summary with AWS Resource Counts */}
                                 {result.summary && (
                                     <div className="bg-gray-50 rounded-lg p-4 mb-4">
                                         <h4 className="font-medium text-gray-900 mb-2">Summary</h4>
@@ -447,75 +638,58 @@ const KSIManager = () => {
                                     </div>
                                 )}
 
-                                {/* Individual KSI Results */}
+                                {/* Individual KSI Results with AWS Resource Details */}
                                 {result.individual_results && result.individual_results.length > 0 && (
                                     <div className="mb-4">
-                                        <h4 className="font-medium text-gray-900 mb-3">Individual KSI Results & CLI Commands</h4>
+                                        <h4 className="font-medium text-gray-900 mb-3">AWS Resource Validation Results</h4>
                                         <div className="space-y-4">
-                                            {result.individual_results.map((ksi, ksiIndex) => {
-                                                const cmdInfo = parseCliCommand(ksi.cli_command);
-                                                return (
-                                                    <div key={ksiIndex} className="border border-gray-100 rounded-lg p-4">
-                                                        {/* KSI Header */}
-                                                        <div className="flex justify-between items-center mb-3">
-                                                            <div>
-                                                                <span className="font-semibold text-lg">{ksi.ksi_id}</span>
-                                                                {ksi.assertion_reason && (
-                                                                    <p className="text-sm text-gray-600 mt-1">{ksi.assertion_reason}</p>
-                                                                )}
-                                                            </div>
-                                                            <span className={`px-2 py-1 text-xs font-semibold rounded ${ksi.assertion ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                                                {ksi.assertion ? 'PASS' : 'FAIL'}
-                                                            </span>
-                                                        </div>
-
-                                                        {/* CLI Commands Section */}
-                                                        <div className="bg-gray-50 rounded-lg p-3 mb-3">
-                                                            <div className="flex items-center justify-between mb-2">
-                                                                <h5 className="font-medium text-gray-800 text-sm">🖥️ CLI Commands Executed</h5>
-                                                                <div className="text-xs text-gray-600">
-                                                                    <span className="mr-3">✅ {ksi.successful_commands || 0} Success</span>
-                                                                    <span>❌ {ksi.failed_commands || 0} Failed</span>
-                                                                </div>
-                                                            </div>
-                                                            
-                                                            {cmdInfo.commands && cmdInfo.commands.length > 0 ? (
-                                                                <div className="space-y-1">
-                                                                    {cmdInfo.commands.map((cmd, cmdIdx) => (
-                                                                        <div key={cmdIdx} className="font-mono text-xs bg-white p-2 rounded border">
-                                                                            {cmd.includes('(+') ? (
-                                                                                <span className="text-blue-600">{cmd}</span>
-                                                                            ) : (
-                                                                                <span className="text-gray-800">{cmd}</span>
-                                                                            )}
-                                                                        </div>
-                                                                    ))}
-                                                                </div>
-                                                            ) : (
-                                                                <div className="text-xs text-gray-500 italic">
-                                                                    {ksi.cli_command || 'No command information available'}
-                                                                </div>
-                                                            )}
-
-                                                            {/* CLI Output Interpretation */}
-                                                            {ksi.cli_output_interpretation && (
-                                                                <div className="mt-2 pt-2 border-t border-gray-200">
-                                                                    <div className="text-xs text-gray-600">
-                                                                        <span className="font-medium">Output Analysis:</span> {ksi.cli_output_interpretation}
-                                                                    </div>
-                                                                </div>
+                                            {result.individual_results.map((ksi, ksiIndex) => (
+                                                <div key={ksiIndex} className="border border-gray-100 rounded-lg p-4">
+                                                    {/* KSI Header */}
+                                                    <div className="flex justify-between items-center mb-3">
+                                                        <div>
+                                                            <span className="font-semibold text-lg">{ksi.ksi_id}</span>
+                                                            {ksi.assertion_reason && (
+                                                                <p className="text-sm text-gray-600 mt-1">{ksi.assertion_reason}</p>
                                                             )}
                                                         </div>
-
-                                                        {/* Requirement/Description */}
-                                                        {ksi.requirement && (
-                                                            <div className="text-sm text-gray-700 bg-blue-50 p-2 rounded">
-                                                                <span className="font-medium">Requirement:</span> {ksi.requirement}
-                                                            </div>
-                                                        )}
+                                                        <span className={`px-2 py-1 text-xs font-semibold rounded ${ksi.assertion ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                                            {ksi.assertion ? 'PASS' : 'FAIL'}
+                                                        </span>
                                                     </div>
-                                                );
-                                            })}
+
+                                                    {/* AWS Resource Details */}
+                                                    {ksi.cli_command_details && (
+                                                        <div className="bg-blue-50 rounded-lg p-3 mb-3">
+                                                            <h5 className="font-medium text-blue-800 text-sm mb-2">🛡️ AWS Resources Validated</h5>
+                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                                {ksi.cli_command_details.map((cmd, cmdIdx) => (
+                                                                    <div key={cmdIdx} className="bg-white p-3 rounded border">
+                                                                        <div className="text-xs font-medium text-gray-700 mb-1">{cmd.note}</div>
+                                                                        {cmd.data && (
+                                                                            <div className="text-sm space-y-1">
+                                                                                {Object.entries(cmd.data).map(([key, value]) => (
+                                                                                    <div key={key} className="flex justify-between">
+                                                                                        <span className="text-gray-600 capitalize">
+                                                                                            {key.replace(/_/g, ' ')}:
+                                                                                        </span>
+                                                                                        <span className="font-semibold">
+                                                                                            {Array.isArray(value) ? value.join(', ') : value}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                ))}
+                                                                            </div>
+                                                                        )}
+                                                                        <div className="text-xs text-gray-500 mt-2 font-mono">
+                                                                            {cmd.command}
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
                                         </div>
                                     </div>
                                 )}
@@ -538,33 +712,6 @@ const KSIManager = () => {
                     </div>
                 </div>
             )}
-
-            {/* API Endpoints Reference */}
-            <div className="bg-gray-50 rounded-lg p-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-3">
-                    API Endpoints
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                    <div>
-                        <div className="font-medium text-blue-600">Validate</div>
-                        <div className="font-mono text-xs text-gray-600 break-all">
-                            POST /api/ksi/validate
-                        </div>
-                    </div>
-                    <div>
-                        <div className="font-medium text-green-600">Executions</div>
-                        <div className="font-mono text-xs text-gray-600 break-all">
-                            GET /api/ksi/executions
-                        </div>
-                    </div>
-                    <div>
-                        <div className="font-medium text-purple-600">Results</div>
-                        <div className="font-mono text-xs text-gray-600 break-all">
-                            GET /api/ksi/results
-                        </div>
-                    </div>
-                </div>
-            </div>
         </div>
     );
 };

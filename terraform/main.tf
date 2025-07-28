@@ -55,6 +55,11 @@ module "lambda" {
   ksi_execution_history_table = module.dynamodb.ksi_execution_history_table_name
   ksi_execution_history_table_arn = module.dynamodb.ksi_execution_history_table_arn
   
+  
+  # Tenant metadata table access
+  tenant_metadata_table     = module.tenant_management.tenant_metadata_table_name
+  tenant_metadata_table_arn = module.tenant_management.tenant_metadata_table_arn
+  
   depends_on = [module.dynamodb]
 }
 
@@ -125,5 +130,6 @@ module "tenant_management" {
   ksi_execution_history_table_name     = module.dynamodb.ksi_execution_history_table_name
   ksi_execution_history_table_arn      = module.dynamodb.ksi_execution_history_table_arn
   
-  depends_on = [module.dynamodb, module.lambda]
+  
+  depends_on = [module.dynamodb]
 }

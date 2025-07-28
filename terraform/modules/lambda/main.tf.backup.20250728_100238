@@ -45,9 +45,7 @@ resource "aws_iam_policy" "ksi_dynamodb_policy" {
           var.ksi_definitions_table_arn,
           var.tenant_ksi_configurations_table_arn,
           var.ksi_execution_history_table_arn,
-          "${var.ksi_execution_history_table_arn}/index/*",
-          var.tenant_metadata_table_arn,
-          "${var.tenant_metadata_table_arn}/index/*"
+          "${var.ksi_execution_history_table_arn}/index/*"
         ]
       }
     ]

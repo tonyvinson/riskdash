@@ -55,3 +55,13 @@ variable "ksi_execution_history_table_arn" {
   description = "ARN of KSI execution history table"
   type        = string
 }
+
+variable "tenant_metadata_table" {
+  description = "Name of tenant metadata table"
+  type        = string
+}
+
+variable "tenant_metadata_table_arn" {
+  description = "ARN of tenant metadata table"
+  type        = string
+}
