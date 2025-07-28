@@ -14,15 +14,10 @@ output "ksi_execution_history_table_name" {
   value       = module.dynamodb.ksi_execution_history_table_name
 }
 
-# Lambda Functions - using CORRECT attribute names
+# Lambda Functions
 output "orchestrator_lambda_arn" {
   description = "ARN of the KSI orchestrator Lambda function"
   value       = module.lambda.orchestrator_lambda_arn
-}
-
-output "orchestrator_lambda_name" {
-  description = "Name of the KSI orchestrator Lambda function"
-  value       = module.lambda.orchestrator_lambda_name
 }
 
 output "validator_lambda_arns" {
@@ -30,38 +25,35 @@ output "validator_lambda_arns" {
   value       = module.lambda.validator_lambda_arns
 }
 
-output "ksi_orchestrator_role_arn" {
-  description = "ARN of the IAM role for KSI orchestrator"
-  value       = module.lambda.orchestrator_role_arn
+# API Gateway
+output "api_gateway" {
+  description = "API Gateway information"
+  value = {
+    id         = module.api_gateway.api_gateway_id
+    invoke_url = module.api_gateway.api_gateway_invoke_url
+    endpoints = {
+      validate_url   = module.api_gateway.validate_endpoint_url
+      executions_url = module.api_gateway.executions_endpoint_url
+      results_url    = module.api_gateway.results_endpoint_url
+    }
+  }
 }
 
 # EventBridge
 output "eventbridge_rule_arn" {
-  description = "ARN of the EventBridge rule for scheduling"
+  description = "ARN of the EventBridge rule for scheduled validations"
   value       = module.eventbridge.eventbridge_rule_arn
 }
 
-# API Gateway - using CORRECT attribute names from your modules
-output "api_gateway" {
-  description = "API Gateway information"
-  value = {
-    api_id       = module.api_gateway.api_gateway_rest_api_id
-    api_arn      = module.api_gateway.api_gateway_rest_api_arn
-    invoke_url   = module.api_gateway.api_gateway_invoke_url
-    stage_arn    = module.api_gateway.api_gateway_stage_arn
-    endpoints    = module.api_gateway.api_endpoints
-  }
-}
-
-# Quick reference URLs - using CORRECT attributes
+# Quick Reference
 output "quick_reference" {
-  description = "Quick reference information"
+  description = "Quick reference for key endpoints and functions"
   value = {
     api_base_url = module.api_gateway.api_gateway_invoke_url
-    validate_url = "${module.api_gateway.api_gateway_invoke_url}/api/ksi/validate"
-    executions_url = "${module.api_gateway.api_gateway_invoke_url}/api/ksi/executions"
-    results_url = "${module.api_gateway.api_gateway_invoke_url}/api/ksi/results"
-    orchestrator_function = module.lambda.orchestrator_lambda_name
+    validate_url = module.api_gateway.validate_endpoint_url
+    executions_url = module.api_gateway.executions_endpoint_url
+    results_url = module.api_gateway.results_endpoint_url
+    orchestrator_function = module.lambda.orchestrator_lambda_function_name
   }
 }
 
@@ -71,7 +63,7 @@ output "riskuity_account_id" {
   value       = data.aws_caller_identity.current.account_id
 }
 
-# Tenant Management Outputs (using try() to handle optional module)
+# Tenant Management Outputs (if module exists)
 output "tenant_management_api_url" {
   description = "Tenant Management API Gateway URL"
   value       = try(module.tenant_management.api_gateway_url, "Not deployed")

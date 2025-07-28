@@ -1,0 +1,17 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws-us-gov:iam::736539455039:role/riskuity-ksi-validator-orchestrator-role-production"
+            },
+            "Action": "sts:AssumeRole",
+            "Condition": {
+                "StringEquals": {
+                    "sts:ExternalId": "RiskDash-FedRAMP-Validation"
+                }
+            }
+        }
+    ]
+}

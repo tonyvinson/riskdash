@@ -1,3 +1,30 @@
+#!/bin/bash
+
+echo "🏢 Setting Up Multitenant Role Assumption for RiskDash"
+echo "====================================================="
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo -e "${BLUE}Creating multitenant validation system with tenant-specific role assumption...${NC}"
+
+# Step 1: Update validators to support role assumption
+echo -e "\n${YELLOW}Step 1: Updating Validators for Tenant Role Assumption${NC}"
+echo "======================================================"
+
+create_multitenant_validator() {
+    local validator_name=$1
+    local validator_dir="lambdas/validators/ksi-validator-$validator_name"
+    
+    echo -e "${YELLOW}📝 Creating multitenant validator: $validator_name${NC}"
+    
+    mkdir -p "$validator_dir"
+    
+    cat > "$validator_dir/handler.py" << 'EOF'
 import boto3
 import json
 from datetime import datetime
@@ -654,3 +681,326 @@ def create_error_response(error_msg, validator_type, execution_id, tenant_id):
             'tenant_id': tenant_id
         })
     }
+EOF
+    
+    echo -e "${GREEN}✅ Created multitenant validator: $validator_name${NC}"
+}
+
+# Create all multitenant validators
+echo -e "\n${YELLOW}Creating multitenant validators...${NC}"
+for validator in cna svc iam mla cmt; do
+    create_multitenant_validator $validator
+done
+
+# Step 2: Update orchestrator role policy for cross-account access
+echo -e "\n${YELLOW}Step 2: Adding Cross-Account Assume Role Permissions${NC}"
+echo "===================================================="
+
+cat > cross_account_assume_policy.json << 'EOF'
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "AssumeRoleInTenantAccounts",
+            "Effect": "Allow",
+            "Action": "sts:AssumeRole",
+            "Resource": "arn:aws-us-gov:iam::*:role/RiskDashValidationRole",
+            "Condition": {
+                "StringEquals": {
+                    "sts:ExternalId": "RiskDash-FedRAMP-Validation"
+                }
+            }
+        },
+        {
+            "Sid": "DynamoDBTenantAccess",
+            "Effect": "Allow",
+            "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:Query",
+                "dynamodb:Scan"
+            ],
+            "Resource": [
+                "arn:aws-us-gov:dynamodb:us-gov-west-1:736539455039:table/riskuity-ksi-validator-tenant-configurations-*",
+                "arn:aws-us-gov:dynamodb:us-gov-west-1:736539455039:table/riskuity-ksi-validator-ksi-definitions-*"
+            ]
+        }
+    ]
+}
+EOF
+
+# Apply cross-account policy
+CROSS_ACCOUNT_POLICY_NAME="RiskDashCrossAccountAssumeRole"
+ORCHESTRATOR_ROLE="riskuity-ksi-validator-orchestrator-role-production"
+AWS_REGION="us-gov-west-1"
+
+echo -e "${BLUE}Creating/updating cross-account assume role policy...${NC}"
+
+if aws iam get-policy --policy-arn "arn:aws-us-gov:iam::736539455039:policy/$CROSS_ACCOUNT_POLICY_NAME" --region "$AWS_REGION" &> /dev/null; then
+    echo -e "${YELLOW}⚠️ Updating existing policy...${NC}"
+    
+    VERSION=$(aws iam get-policy --policy-arn "arn:aws-us-gov:iam::736539455039:policy/$CROSS_ACCOUNT_POLICY_NAME" --region "$AWS_REGION" --query 'Policy.DefaultVersionId' --output text)
+    
+    aws iam create-policy-version \
+        --policy-arn "arn:aws-us-gov:iam::736539455039:policy/$CROSS_ACCOUNT_POLICY_NAME" \
+        --policy-document file://cross_account_assume_policy.json \
+        --set-as-default \
+        --region "$AWS_REGION"
+    
+    aws iam delete-policy-version \
+        --policy-arn "arn:aws-us-gov:iam::736539455039:policy/$CROSS_ACCOUNT_POLICY_NAME" \
+        --version-id "$VERSION" \
+        --region "$AWS_REGION" &> /dev/null
+else
+    echo -e "${BLUE}Creating new cross-account policy...${NC}"
+    
+    aws iam create-policy \
+        --policy-name "$CROSS_ACCOUNT_POLICY_NAME" \
+        --policy-document file://cross_account_assume_policy.json \
+        --description "Cross-account role assumption for multitenant validation" \
+        --region "$AWS_REGION"
+fi
+
+# Attach to orchestrator role
+aws iam attach-role-policy \
+    --role-name "$ORCHESTRATOR_ROLE" \
+    --policy-arn "arn:aws-us-gov:iam::736539455039:policy/$CROSS_ACCOUNT_POLICY_NAME" \
+    --region "$AWS_REGION"
+
+echo -e "${GREEN}✅ Cross-account policy attached${NC}"
+
+# Step 3: Package and deploy updated validators
+echo -e "\n${YELLOW}Step 3: Packaging and Deploying Multitenant Validators${NC}"
+echo "======================================================"
+
+for validator in cna svc iam mla cmt; do
+    echo -e "${YELLOW}📦 Packaging $validator validator...${NC}"
+    
+    validator_dir="lambdas/validators/ksi-validator-$validator"
+    zip_file="terraform/validator-$validator.zip"
+    
+    if [ -d "$validator_dir" ]; then
+        temp_dir=$(mktemp -d)
+        cp "$validator_dir/handler.py" "$temp_dir/"
+        
+        cd "$temp_dir"
+        zip -rq "../validator-$validator.zip" .
+        cd - > /dev/null
+        
+        mv "$temp_dir/../validator-$validator.zip" "$zip_file"
+        rm -rf "$temp_dir"
+        
+        echo -e "${GREEN}✅ Packaged $validator validator${NC}"
+        
+        # Deploy updated function
+        function_name="riskuity-ksi-validator-validator-${validator}-production"
+        
+        if aws lambda get-function --function-name "$function_name" --region "$AWS_REGION" &> /dev/null; then
+            aws lambda update-function-code \
+                --function-name "$function_name" \
+                --zip-file "fileb://$zip_file" \
+                --region "$AWS_REGION" > /dev/null
+            echo -e "${GREEN}✅ Updated $function_name${NC}"
+        fi
+    fi
+done
+
+# Step 4: Generate tenant role template
+echo -e "\n${YELLOW}Step 4: Generating Tenant Role Template${NC}"
+echo "========================================"
+
+cat > tenant_validation_role_template.json << 'EOF'
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws-us-gov:iam::736539455039:role/riskuity-ksi-validator-orchestrator-role-production"
+            },
+            "Action": "sts:AssumeRole",
+            "Condition": {
+                "StringEquals": {
+                    "sts:ExternalId": "RiskDash-FedRAMP-Validation"
+                }
+            }
+        }
+    ]
+}
+EOF
+
+cat > tenant_validation_permissions.json << 'EOF'
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "NetworkArchitectureValidation",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeSubnets",
+                "ec2:DescribeAvailabilityZones",
+                "ec2:DescribeVpcs",
+                "ec2:DescribeRouteTables",
+                "ec2:DescribeNetworkAcls",
+                "ec2:DescribeSecurityGroups",
+                "route53:ListHostedZones",
+                "route53:GetHostedZone"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "ServiceValidation",
+            "Effect": "Allow",
+            "Action": [
+                "kms:ListKeys",
+                "kms:ListAliases",
+                "kms:DescribeKey",
+                "secretsmanager:ListSecrets",
+                "secretsmanager:DescribeSecret",
+                "s3:ListAllMyBuckets",
+                "s3:GetBucketEncryption",
+                "s3:GetBucketVersioning"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "IdentityAccessValidation",
+            "Effect": "Allow",
+            "Action": [
+                "iam:ListUsers",
+                "iam:ListRoles",
+                "iam:ListPolicies",
+                "iam:GetAccountSummary",
+                "iam:GetAccountPasswordPolicy",
+                "iam:ListMFADevices",
+                "iam:GetUser",
+                "iam:GetRole"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "MonitoringLoggingValidation",
+            "Effect": "Allow",
+            "Action": [
+                "cloudtrail:DescribeTrails",
+                "cloudtrail:GetTrailStatus",
+                "cloudwatch:DescribeAlarms",
+                "cloudwatch:GetMetricStatistics",
+                "logs:DescribeLogGroups",
+                "sns:ListTopics",
+                "sns:GetTopicAttributes",
+                "events:ListRules"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "ChangeManagementValidation",
+            "Effect": "Allow",
+            "Action": [
+                "cloudtrail:DescribeTrails",
+                "config:DescribeConfigurationRecorders",
+                "config:DescribeDeliveryChannels",
+                "config:GetComplianceSummaryByConfigRule",
+                "cloudformation:ListStacks",
+                "cloudformation:DescribeStacks",
+                "cloudformation:GetStackPolicy"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+EOF
+
+# Create tenant instructions
+cat > TENANT_ONBOARDING_INSTRUCTIONS.md << 'EOF'
+# RiskDash Tenant Onboarding Instructions
+
+## Step 1: Create IAM Role in Your AWS Account
+
+Create an IAM role in your AWS account that RiskDash can assume for compliance validation.
+
+### 1.1 Create the Role
+
+```bash
+aws iam create-role \
+    --role-name RiskDashValidationRole \
+    --assume-role-policy-document file://tenant_validation_role_template.json \
+    --description "Role for RiskDash FedRAMP compliance validation"
+```
+
+### 1.2 Attach Permissions Policy
+
+```bash
+aws iam put-role-policy \
+    --role-name RiskDashValidationRole \
+    --policy-name RiskDashValidationPolicy \
+    --policy-document file://tenant_validation_permissions.json
+```
+
+### 1.3 Get Role ARN
+
+```bash
+aws iam get-role --role-name RiskDashValidationRole --query 'Role.Arn' --output text
+```
+
+## Step 2: Register with RiskDash
+
+Use the Role ARN from Step 1.3 when registering your tenant:
+
+```bash
+curl -X POST "https://your-riskdash-api/api/tenant/onboard" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tenant_id": "your-organization-id",
+    "account_id": "123456789012",
+    "role_arn": "arn:aws-us-gov:iam::123456789012:role/RiskDashValidationRole",
+    "external_id": "RiskDash-FedRAMP-Validation",
+    "contact_email": "security@yourorg.gov"
+  }'
+```
+
+## Step 3: Test Validation
+
+After registration, test the validation:
+
+```bash
+curl -X POST "https://your-riskdash-api/api/ksi/validate" \
+  -H "Content-Type: application/json" \
+  -d '{"tenant_id": "your-organization-id"}'
+```
+
+## Security Notes
+
+- The role only grants READ permissions for compliance validation
+- External ID provides additional security for role assumption
+- RiskDash can only access your account when performing validations
+- All validations are logged in CloudTrail
+
+## What Gets Validated
+
+- **Network Architecture**: VPCs, subnets, Route53
+- **Services**: KMS keys, Secrets Manager, S3 encryption
+- **Identity & Access**: IAM users, roles, policies
+- **Monitoring & Logging**: CloudTrail, CloudWatch, SNS
+- **Change Management**: AWS Config, CloudFormation
+EOF
+
+# Cleanup
+rm -f cross_account_assume_policy.json
+
+echo ""
+echo -e "${GREEN}🎉 Multitenant Role Assumption System Complete!${NC}"
+echo -e "${BLUE}What was created:${NC}"
+echo "  ✅ Updated validators to assume tenant-specific roles"
+echo "  ✅ Added cross-account assume role permissions"
+echo "  ✅ Created tenant role template and instructions"
+echo "  ✅ Generated tenant onboarding documentation"
+
+echo ""
+echo -e "${YELLOW}📋 Next Steps:${NC}"
+echo "1. Share TENANT_ONBOARDING_INSTRUCTIONS.md with tenants"
+echo "2. Tenants create RiskDashValidationRole in their accounts"
+echo "3. Tenants register with their role ARN"
+echo "4. Test validation with tenant-specific accounts"
+
+echo ""
+echo -e "${GREEN}Your RiskDash platform now supports true multitenant validation! 🚀${NC}"

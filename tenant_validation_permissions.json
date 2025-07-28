@@ -1,0 +1,79 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "NetworkArchitectureValidation",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeSubnets",
+                "ec2:DescribeAvailabilityZones",
+                "ec2:DescribeVpcs",
+                "ec2:DescribeRouteTables",
+                "ec2:DescribeNetworkAcls",
+                "ec2:DescribeSecurityGroups",
+                "route53:ListHostedZones",
+                "route53:GetHostedZone"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "ServiceValidation",
+            "Effect": "Allow",
+            "Action": [
+                "kms:ListKeys",
+                "kms:ListAliases",
+                "kms:DescribeKey",
+                "secretsmanager:ListSecrets",
+                "secretsmanager:DescribeSecret",
+                "s3:ListAllMyBuckets",
+                "s3:GetBucketEncryption",
+                "s3:GetBucketVersioning"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "IdentityAccessValidation",
+            "Effect": "Allow",
+            "Action": [
+                "iam:ListUsers",
+                "iam:ListRoles",
+                "iam:ListPolicies",
+                "iam:GetAccountSummary",
+                "iam:GetAccountPasswordPolicy",
+                "iam:ListMFADevices",
+                "iam:GetUser",
+                "iam:GetRole"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "MonitoringLoggingValidation",
+            "Effect": "Allow",
+            "Action": [
+                "cloudtrail:DescribeTrails",
+                "cloudtrail:GetTrailStatus",
+                "cloudwatch:DescribeAlarms",
+                "cloudwatch:GetMetricStatistics",
+                "logs:DescribeLogGroups",
+                "sns:ListTopics",
+                "sns:GetTopicAttributes",
+                "events:ListRules"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "ChangeManagementValidation",
+            "Effect": "Allow",
+            "Action": [
+                "cloudtrail:DescribeTrails",
+                "config:DescribeConfigurationRecorders",
+                "config:DescribeDeliveryChannels",
+                "config:GetComplianceSummaryByConfigRule",
+                "cloudformation:ListStacks",
+                "cloudformation:DescribeStacks",
+                "cloudformation:GetStackPolicy"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
