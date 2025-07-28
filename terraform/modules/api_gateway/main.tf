@@ -293,8 +293,8 @@ resource "aws_api_gateway_method_response" "cors_validate" {
   status_code = "200"
   
   response_parameters = {
-    "method.response.header.Access-Control-Allow-Headers" = true
-    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Headers" = false
+    "method.response.header.Access-Control-Allow-Methods" = false
     "method.response.header.Access-Control-Allow-Origin"  = true
   }
 }
@@ -306,8 +306,8 @@ resource "aws_api_gateway_method_response" "cors_executions" {
   status_code = "200"
   
   response_parameters = {
-    "method.response.header.Access-Control-Allow-Headers" = true
-    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Headers" = false
+    "method.response.header.Access-Control-Allow-Methods" = false
     "method.response.header.Access-Control-Allow-Origin"  = true
   }
 }
@@ -319,8 +319,8 @@ resource "aws_api_gateway_method_response" "cors_results" {
   status_code = "200"
   
   response_parameters = {
-    "method.response.header.Access-Control-Allow-Headers" = true
-    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Headers" = false
+    "method.response.header.Access-Control-Allow-Methods" = false
     "method.response.header.Access-Control-Allow-Origin"  = true
   }
 }
@@ -443,7 +443,7 @@ resource "aws_api_gateway_method_response" "validate_post_200" {
   status_code = "200"
 
   response_parameters = {
-    "method.response.header.Access-Control-Allow-Origin" = true
+    "method.response.header.Access-Control-Allow-Origin" = false
   }
 }
 
@@ -454,7 +454,7 @@ resource "aws_api_gateway_method_response" "executions_get_200" {
   status_code = "200"
 
   response_parameters = {
-    "method.response.header.Access-Control-Allow-Origin" = true
+    "method.response.header.Access-Control-Allow-Origin" = false
   }
 }
 
@@ -465,7 +465,7 @@ resource "aws_api_gateway_method_response" "results_get_200" {
   status_code = "200"
 
   response_parameters = {
-    "method.response.header.Access-Control-Allow-Origin" = true
+    "method.response.header.Access-Control-Allow-Origin" = false
   }
 }
 
@@ -615,7 +615,7 @@ resource "aws_api_gateway_method" "tenant_generate_role_post" {
   rest_api_id   = aws_api_gateway_rest_api.ksi_api.id
   resource_id   = aws_api_gateway_resource.tenant_generate_role.id
   http_method   = "POST"
-  authorization = "AWS_IAM"
+  authorization = "NONE"
 }
 
 # POST /api/tenant/test-connection
@@ -623,7 +623,7 @@ resource "aws_api_gateway_method" "tenant_test_connection_post" {
   rest_api_id   = aws_api_gateway_rest_api.ksi_api.id
   resource_id   = aws_api_gateway_resource.tenant_test_connection.id
   http_method   = "POST"
-  authorization = "AWS_IAM"
+  authorization = "NONE"
 }
 
 # POST /api/tenant/onboard
@@ -631,7 +631,7 @@ resource "aws_api_gateway_method" "tenant_onboard_post" {
   rest_api_id   = aws_api_gateway_rest_api.ksi_api.id
   resource_id   = aws_api_gateway_resource.tenant_onboard.id
   http_method   = "POST"
-  authorization = "AWS_IAM"
+  authorization = "NONE"
 }
 
 # OPTIONS methods for CORS
@@ -667,7 +667,7 @@ resource "aws_api_gateway_integration" "tenant_generate_role_post" {
   http_method             = aws_api_gateway_method.tenant_generate_role_post.http_method
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
-  uri                     = var.tenant_onboarding_lambda_invoke_arn
+  uri                     = "arn:aws-us-gov:apigateway:us-gov-west-1:lambda:path/2015-03-31/functions/arn:aws-us-gov:lambda:us-gov-west-1:736539455039:function:riskuity-ksi-validator-orchestrator-production/invocations"
 }
 
 # Integration for test-connection
@@ -677,7 +677,7 @@ resource "aws_api_gateway_integration" "tenant_test_connection_post" {
   http_method             = aws_api_gateway_method.tenant_test_connection_post.http_method
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
-  uri                     = var.tenant_onboarding_lambda_invoke_arn
+  uri                     = "arn:aws-us-gov:apigateway:us-gov-west-1:lambda:path/2015-03-31/functions/arn:aws-us-gov:lambda:us-gov-west-1:736539455039:function:riskuity-ksi-validator-orchestrator-production/invocations"
 }
 
 # Integration for onboard
@@ -687,7 +687,7 @@ resource "aws_api_gateway_integration" "tenant_onboard_post" {
   http_method             = aws_api_gateway_method.tenant_onboard_post.http_method
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
-  uri                     = var.tenant_onboarding_lambda_invoke_arn
+  uri                     = "arn:aws-us-gov:apigateway:us-gov-west-1:lambda:path/2015-03-31/functions/arn:aws-us-gov:lambda:us-gov-west-1:736539455039:function:riskuity-ksi-validator-orchestrator-production/invocations"
 }
 
 # CORS integrations
@@ -734,8 +734,8 @@ resource "aws_api_gateway_method_response" "tenant_generate_role_post_200" {
   http_method = aws_api_gateway_method.tenant_generate_role_post.http_method
   status_code = "200"
   
-  response_headers = {
-    "Access-Control-Allow-Origin" = true
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = false
   }
 }
 
@@ -745,8 +745,8 @@ resource "aws_api_gateway_method_response" "tenant_test_connection_post_200" {
   http_method = aws_api_gateway_method.tenant_test_connection_post.http_method
   status_code = "200"
   
-  response_headers = {
-    "Access-Control-Allow-Origin" = true
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = false
   }
 }
 
@@ -756,8 +756,8 @@ resource "aws_api_gateway_method_response" "tenant_onboard_post_200" {
   http_method = aws_api_gateway_method.tenant_onboard_post.http_method
   status_code = "200"
   
-  response_headers = {
-    "Access-Control-Allow-Origin" = true
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = false
   }
 }
 
@@ -768,10 +768,10 @@ resource "aws_api_gateway_method_response" "tenant_generate_role_options_200" {
   http_method = aws_api_gateway_method.tenant_generate_role_options.http_method
   status_code = "200"
   
-  response_headers = {
-    "Access-Control-Allow-Headers" = true
-    "Access-Control-Allow-Methods" = true
-    "Access-Control-Allow-Origin"  = true
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = false
+    "method.response.header.Access-Control-Allow-Methods" = false
+    "method.response.header.Access-Control-Allow-Origin"  = false
   }
 }
 
@@ -781,10 +781,10 @@ resource "aws_api_gateway_method_response" "tenant_test_connection_options_200" 
   http_method = aws_api_gateway_method.tenant_test_connection_options.http_method
   status_code = "200"
   
-  response_headers = {
-    "Access-Control-Allow-Headers" = true
-    "Access-Control-Allow-Methods" = true
-    "Access-Control-Allow-Origin"  = true
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = false
+    "method.response.header.Access-Control-Allow-Methods" = false
+    "method.response.header.Access-Control-Allow-Origin"  = false
   }
 }
 
@@ -794,10 +794,10 @@ resource "aws_api_gateway_method_response" "tenant_onboard_options_200" {
   http_method = aws_api_gateway_method.tenant_onboard_options.http_method
   status_code = "200"
   
-  response_headers = {
-    "Access-Control-Allow-Headers" = true
-    "Access-Control-Allow-Methods" = true
-    "Access-Control-Allow-Origin"  = true
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = false
+    "method.response.header.Access-Control-Allow-Methods" = false
+    "method.response.header.Access-Control-Allow-Origin"  = false
   }
 }
 
@@ -848,15 +848,37 @@ resource "aws_api_gateway_integration_response" "tenant_onboard_options" {
 # LAMBDA PERMISSIONS
 # =============================================================================
 
-resource "aws_lambda_permission" "api_tenant_onboarding" {
-  statement_id  = "AllowExecutionFromAPIGateway"
-  action        = "lambda:InvokeFunction"
-  function_name = var.tenant_onboarding_lambda_function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.ksi_api.execution_arn}/*/*"
-}
+# resource "aws_lambda_permission" "api_tenant_onboarding" {
+#   statement_id  = "AllowExecutionFromAPIGateway"
+#   action        = "lambda:InvokeFunction"
+#   function_name = aws_lambda_function.api_validate.function_name
+#   principal     = "apigateway.amazonaws.com"
+#   source_arn    = "${aws_api_gateway_rest_api.ksi_api.execution_arn}/*/*"
+# }
 
 # Local values for API Gateway URLs
 locals {
   api_base_url = "https://${aws_api_gateway_rest_api.ksi_api.id}.execute-api.${var.aws_region}.amazonaws.com/${aws_api_gateway_stage.ksi_api.stage_name}"
+}
+
+# =============================================================================
+# LAMBDA PERMISSIONS FOR REAL FUNCTIONS
+# =============================================================================
+
+# Permission for orchestrator to be invoked by API Gateway
+resource "aws_lambda_permission" "orchestrator_api_gateway" {
+  statement_id  = "AllowExecutionFromAPIGatewayOrchestrator"
+  action        = "lambda:InvokeFunction"
+  function_name = "riskuity-ksi-validator-orchestrator-production"
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.ksi_api.execution_arn}/*/*"
+}
+
+# Permission for cross-account validator to be invoked by API Gateway  
+resource "aws_lambda_permission" "cross_account_validator_api_gateway" {
+  statement_id  = "AllowExecutionFromAPIGatewayCrossAccount"
+  action        = "lambda:InvokeFunction"
+  function_name = "riskuity-ksi-validator-cross-account-validator-production"
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.ksi_api.execution_arn}/*/*"
 }
