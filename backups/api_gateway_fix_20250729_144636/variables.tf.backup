@@ -26,6 +26,11 @@ variable "lambda_memory_size" {
   default     = 256
 }
 
+variable "orchestrator_lambda_arn" {
+  description = "ARN of the KSI orchestrator Lambda function"
+  type        = string
+}
+
 variable "ksi_definitions_table" {
   description = "Name of KSI definitions table"
   type        = string
@@ -74,30 +79,21 @@ variable "api_throttling_burst_limit" {
   default     = 2000
 }
 
-# =============================================================================
-# ADDITIONAL VARIABLES TO FIX ROOT MODULE ERRORS
-# =============================================================================
-
-variable "aws_region" {
-  description = "AWS region for API Gateway deployment"
-  type        = string
-  default     = "us-gov-west-1"
-}
-
-variable "orchestrator_lambda_arn" {
-  description = "ARN of the KSI orchestrator Lambda function"
-  type        = string
-  default     = ""
-}
-
+# Tenant Management Lambda variables
 variable "tenant_onboarding_lambda_function_name" {
   description = "Name of the tenant onboarding Lambda function"
   type        = string
-  default     = ""
+  default = null
 }
 
 variable "tenant_onboarding_lambda_invoke_arn" {
   description = "Invoke ARN of the tenant onboarding Lambda function"
   type        = string
-  default     = ""
+  default = null
+}
+
+variable "aws_region" {
+  description = "AWS region for API Gateway deployment"
+  type        = string
+  default     = "us-gov-west-1"
 }

@@ -56,6 +56,7 @@ output "cloudwatch_log_groups" {
     validate_logs    = aws_cloudwatch_log_group.api_validate_logs.name
     executions_logs  = aws_cloudwatch_log_group.api_executions_logs.name
     results_logs     = aws_cloudwatch_log_group.api_results_logs.name
+    api_access_logs  = aws_cloudwatch_log_group.api_access_logs.name
   }
 }
 

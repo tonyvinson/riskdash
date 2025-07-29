@@ -1,96 +1,71 @@
-# DynamoDB Tables
-output "ksi_definitions_table_name" {
-  description = "Name of the KSI definitions DynamoDB table"
-  value       = module.dynamodb.ksi_definitions_table_name
+# =============================================================================
+# ROOT MODULE OUTPUTS - Reference module outputs, not resources directly
+# =============================================================================
+
+output "api_gateway_rest_api_id" {
+  description = "ID of the API Gateway REST API"
+  value       = module.api_gateway.api_gateway_rest_api_id
 }
 
-output "tenant_ksi_configurations_table_name" {
-  description = "Name of the tenant KSI configurations DynamoDB table"
-  value       = module.dynamodb.tenant_ksi_configurations_table_name
+output "api_gateway_rest_api_arn" {
+  description = "ARN of the API Gateway REST API"
+  value       = module.api_gateway.api_gateway_rest_api_arn
 }
 
-output "ksi_execution_history_table_name" {
-  description = "Name of the KSI execution history DynamoDB table"
-  value       = module.dynamodb.ksi_execution_history_table_name
+output "api_gateway_stage_arn" {
+  description = "ARN of the API Gateway stage"
+  value       = module.api_gateway.api_gateway_stage_arn
 }
 
-# Lambda Functions - using CORRECT attribute names
-output "orchestrator_lambda_arn" {
+output "api_gateway_invoke_url" {
+  description = "The invoke URL for the API Gateway"
+  value       = module.api_gateway.api_gateway_invoke_url
+}
+
+output "api_gateway_deployment_id" {
+  description = "ID of the API Gateway deployment"
+  value       = module.api_gateway.api_gateway_deployment_id
+}
+
+output "api_lambda_function_arns" {
+  description = "ARNs of API Lambda functions"
+  value       = module.api_gateway.api_lambda_function_arns
+}
+
+output "api_lambda_function_names" {
+  description = "Names of API Lambda functions"
+  value       = module.api_gateway.api_lambda_function_names
+}
+
+output "api_endpoints" {
+  description = "Available API endpoints"
+  value       = module.api_gateway.api_endpoints
+}
+
+output "cloudwatch_log_groups" {
+  description = "CloudWatch log groups for API components"
+  value       = module.api_gateway.cloudwatch_log_groups
+}
+
+output "quick_reference" {
+  description = "Quick reference for testing API endpoints"
+  value       = module.api_gateway.quick_reference
+}
+
+# =============================================================================
+# OTHER MODULE OUTPUTS
+# =============================================================================
+
+output "lambda_orchestrator_arn" {
   description = "ARN of the KSI orchestrator Lambda function"
   value       = module.lambda.orchestrator_lambda_arn
 }
 
-output "orchestrator_lambda_name" {
-  description = "Name of the KSI orchestrator Lambda function"
-  value       = module.lambda.orchestrator_lambda_name
-}
-
-output "validator_lambda_arns" {
-  description = "ARNs of all KSI validator Lambda functions"
-  value       = module.lambda.validator_lambda_arns
-}
-
-output "ksi_orchestrator_role_arn" {
-  description = "ARN of the IAM role for KSI orchestrator"
-  value       = module.lambda.orchestrator_role_arn
-}
-
-# EventBridge
-output "eventbridge_rule_arn" {
-  description = "ARN of the EventBridge rule for scheduling"
-  value       = module.eventbridge.eventbridge_rule_arn
-}
-
-# API Gateway - using CORRECT attribute names from your modules
-output "api_gateway" {
-  description = "API Gateway information"
+output "dynamodb_tables" {
+  description = "DynamoDB table information"
   value = {
-    api_id       = module.api_gateway.api_gateway_rest_api_id
-    api_arn      = module.api_gateway.api_gateway_rest_api_arn
-    invoke_url   = module.api_gateway.api_gateway_invoke_url
-    stage_arn    = module.api_gateway.api_gateway_stage_arn
-    endpoints    = module.api_gateway.api_endpoints
+    ksi_definitions_table = module.dynamodb.ksi_definitions_table_name
+    tenant_ksi_configurations_table = module.dynamodb.tenant_ksi_configurations_table_name
+    ksi_execution_history_table = module.dynamodb.ksi_execution_history_table_name
   }
-}
-
-# Quick reference URLs - using CORRECT attributes
-output "quick_reference" {
-  description = "Quick reference information"
-  value = {
-    api_base_url = module.api_gateway.api_gateway_invoke_url
-    validate_url = "${module.api_gateway.api_gateway_invoke_url}/api/ksi/validate"
-    executions_url = "${module.api_gateway.api_gateway_invoke_url}/api/ksi/executions"
-    results_url = "${module.api_gateway.api_gateway_invoke_url}/api/ksi/results"
-    orchestrator_function = module.lambda.orchestrator_lambda_name
-  }
-}
-
-# Account Information
-output "riskuity_account_id" {
-  description = "Current AWS account ID"
-  value       = data.aws_caller_identity.current.account_id
-}
-
-# Tenant Management Outputs (using try() to handle optional module)
-output "tenant_management_api_url" {
-  description = "Tenant Management API Gateway URL"
-  value       = try(module.tenant_management.api_gateway_url, "Not deployed")
-}
-
-output "tenant_onboarding_instructions" {
-  description = "Instructions for tenant onboarding"
-  value = try({
-    api_url = module.tenant_management.api_gateway_url
-    endpoints = {
-      generate_role_instructions = "${module.tenant_management.api_gateway_url}/api/tenant/generate-role-instructions"
-      test_connection = "${module.tenant_management.api_gateway_url}/api/tenant/test-connection"
-      onboard = "${module.tenant_management.api_gateway_url}/api/tenant/onboard"
-      list = "${module.tenant_management.api_gateway_url}/api/tenant/list"
-    }
-  }, "Tenant management not deployed")
-}
-
-output "cross_account_validator_function_name" {
-  description = "Cross-account validator Lambda function name"
-  value       = try(module.tenant_management.cross_account_validator_function_name, "Not deployed")
 }
