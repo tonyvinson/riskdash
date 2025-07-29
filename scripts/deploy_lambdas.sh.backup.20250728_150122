@@ -97,7 +97,7 @@ package_lambda() {
 package_api_lambdas() {
     log_info "=== Packaging API Lambda Functions ==="
     
-    for api_func in validate executions results tenants; do
+    for api_func in validate executions results; do
         if [ -f "lambdas/api/${api_func}_handler.py" ]; then
             # Create temporary directory for this API function
             temp_api_dir=$(mktemp -d)
@@ -180,7 +180,7 @@ deploy_lambda_updates() {
     done
     
     # Update API functions
-    for api_func in validate executions results tenants; do
+    for api_func in validate executions results; do
         api_function="$PROJECT_NAME-api-$api_func-$ENVIRONMENT"
         if aws lambda get-function --function-name "$api_function" >/dev/null 2>&1; then
             if [ -f "terraform/api-$api_func.zip" ]; then

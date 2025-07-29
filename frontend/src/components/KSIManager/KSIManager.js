@@ -101,22 +101,66 @@ const KSIManager = () => {
         return tenantId.replace(/[-_]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
     };
 
-    const fetchExecutionHistory = useCallback(async () => {
-        try {
-            setLoading(true);
-            setError(null);
-            
-            const response = await ksiService.getExecutionHistory(selectedTenant, 10);
-            console.log('Execution History Response:', response);
-            
-            setExecutionHistory(response.executions || response.items || []);
-        } catch (err) {
-            console.error('Error fetching execution history:', err);
-            setError(`Failed to fetch execution history: ${err.message}`);
-        } finally {
-            setLoading(false);
+
+    // Replace the fetchExecutionHistory function in KSIManager.js with this:
+
+const fetchExecutionHistory = useCallback(async () => {
+    try {
+        setLoading(true);
+        setError(null);
+        
+        console.log(`🔍 Fetching execution history for tenant: ${selectedTenant}`);
+        
+        const response = await ksiService.getExecutionHistory(selectedTenant, 10);
+        console.log('📊 Raw Execution History Response:', response);
+        
+        // Handle different response formats
+        let executions = [];
+        
+        if (response.success && response.data && response.data.executions) {
+            // Format: {success: true, data: {executions: [...]}}
+            executions = response.data.executions;
+            console.log('✅ Found executions in response.data.executions');
+        } else if (response.executions) {
+            // Format: {executions: [...]}
+            executions = response.executions;
+            console.log('✅ Found executions in response.executions');
+        } else if (response.items) {
+            // Format: {items: [...]}
+            executions = response.items;
+            console.log('✅ Found executions in response.items');
+        } else if (Array.isArray(response)) {
+            // Format: [...]
+            executions = response;
+            console.log('✅ Response is array of executions');
+        } else {
+            console.warn('⚠️ Unexpected response format:', response);
+            executions = [];
         }
-    }, [selectedTenant]);
+        
+        console.log(`📈 Processed ${executions.length} execution records`);
+        
+        // Sort executions by timestamp (newest first)
+        executions.sort((a, b) => {
+            const timeA = new Date(a.timestamp || a.started_at || 0);
+            const timeB = new Date(b.timestamp || b.started_at || 0);
+            return timeB - timeA;
+        });
+        
+        setExecutionHistory(executions);
+        
+        if (executions.length === 0) {
+            console.log('ℹ️ No execution history found for this tenant');
+        }
+        
+    } catch (err) {
+        console.error('❌ Error fetching execution history:', err);
+        setError(`Failed to fetch execution history: ${err.message}`);
+        setExecutionHistory([]);
+    } finally {
+        setLoading(false);
+    }
+}, [selectedTenant]);
 
     // Load tenants on component mount
     useEffect(() => {

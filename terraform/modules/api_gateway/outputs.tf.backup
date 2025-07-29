@@ -47,7 +47,7 @@ output "api_endpoints" {
     validate_url   = "https://${aws_api_gateway_rest_api.ksi_api.id}.execute-api.${data.aws_region.current.id}.amazonaws.com/${var.environment}/api/ksi/validate"
     executions_url = "https://${aws_api_gateway_rest_api.ksi_api.id}.execute-api.${data.aws_region.current.id}.amazonaws.com/${var.environment}/api/ksi/executions"
     results_url    = "https://${aws_api_gateway_rest_api.ksi_api.id}.execute-api.${data.aws_region.current.id}.amazonaws.com/${var.environment}/api/ksi/results"
-    tenants_url    = "https://${aws_api_gateway_rest_api.ksi_api.id}.execute-api.${data.aws_region.current.id}.amazonaws.com/${var.environment}/api/ksi/tenants"  }
+  }
 }
 
 output "cloudwatch_log_groups" {

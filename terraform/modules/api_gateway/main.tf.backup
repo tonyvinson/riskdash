@@ -926,6 +926,7 @@ resource "aws_lambda_function" "api_tenants" {
     variables = {
       ENVIRONMENT = var.environment
       TENANT_KSI_CONFIGURATIONS_TABLE = var.tenant_ksi_configurations_table
+      AWS_REGION = var.aws_region
     }
   }
   
