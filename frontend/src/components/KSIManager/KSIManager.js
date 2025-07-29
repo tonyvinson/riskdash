@@ -1,200 +1,330 @@
-// frontend/src/components/KSIManager/KSIManager.js - Enterprise Edition with Dynamic Tenants & Rich AWS Data Display
 import React, { useState, useEffect, useCallback } from 'react';
-import { ksiService } from '../../services/ksiService';
+import ksiService from '../../services/ksiService';
 
 const KSIManager = () => {
-    const [loading, setLoading] = useState(false);
-    const [selectedTenant, setSelectedTenant] = useState('real-test');
     const [availableTenants, setAvailableTenants] = useState([]);
-    const [tenantsLoading, setTenantsLoading] = useState(false);
+    const [selectedTenant, setSelectedTenant] = useState('');
     const [executionHistory, setExecutionHistory] = useState([]);
     const [validationResults, setValidationResults] = useState([]);
-    const [error, setError] = useState(null);
-    const [lastExecution, setLastExecution] = useState(null);
-    const [selectedExecutionId, setSelectedExecutionId] = useState(null);
     const [complianceOverview, setComplianceOverview] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const [isValidating, setIsValidating] = useState(false);
+    const [expandedExecution, setExpandedExecution] = useState(null);
 
-    // KSI categories for display
-    const ksiCategories = {
-        'CNA': { name: 'Configuration & Network Architecture', icon: '🏗️', color: 'blue' },
-        'SVC': { name: 'Service Configuration', icon: '⚙️', color: 'green' },
-        'IAM': { name: 'Identity & Access Management', icon: '🔐', color: 'purple' }, 
-        'MLA': { name: 'Monitoring, Logging & Alerting', icon: '📊', color: 'orange' },
-        'CMT': { name: 'Configuration Management & Tracking', icon: '📋', color: 'indigo' }
+    // ✅ FIXED: Robust API Response Parsing Utility
+    const parseApiResponse = (response, possiblePaths = []) => {
+        console.log('🔍 Parsing API response:', response);
+        
+        // Check success flag first
+        if (!response.success) {
+            console.warn('⚠️ API response indicated failure:', response);
+            return [];
+        }
+
+        // Try multiple possible data locations
+        const dataPaths = [
+            'data.validation_results',
+            'data.validators_completed', 
+            'data.results',
+            'data.executions',
+            'data',
+            'validation_results',
+            'validators_completed',
+            'results',
+            'executions',
+            ...possiblePaths
+        ];
+
+        for (const path of dataPaths) {
+            const pathArray = path.split('.');
+            let value = response;
+            
+            // Navigate through the path
+            for (const key of pathArray) {
+                if (value && typeof value === 'object' && key in value) {
+                    value = value[key];
+                } else {
+                    value = null;
+                    break;
+                }
+            }
+            
+            // Check if we found valid data
+            if (Array.isArray(value) && value.length > 0) {
+                console.log(`✅ Found data at path: ${path}`, value);
+                return value;
+            } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+                // Handle single object responses
+                console.log(`✅ Found object at path: ${path}`, value);
+                return [value];
+            }
+        }
+
+        console.log('ℹ️ No data found in API response');
+        return [];
     };
 
-    // Load available tenants from API
-    const loadTenants = useCallback(async () => {
+    // ✅ FIXED: Enhanced JSON body parsing with error handling
+    const parseValidationBody = (result) => {
         try {
-            setTenantsLoading(true);
-            setError(null);
+            console.log('📊 Parsing validation body for:', result?.validator);
             
-            console.log('🏢 Loading tenants from API...');
+            let resultBody = result?.result?.body;
             
-            // Call the tenants endpoint
-            const response = await fetch(`${process.env.REACT_APP_API_URL || 'https://d5804hjt80.execute-api.us-gov-west-1.amazonaws.com/production'}/api/ksi/tenants`, {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json'
+            // Handle different body formats
+            if (typeof resultBody === 'string') {
+                try {
+                    const parsed = JSON.parse(resultBody);
+                    console.log(`✅ Successfully parsed JSON body for ${result?.validator}:`, parsed);
+                    return parsed;
+                } catch (parseError) {
+                    console.warn(`⚠️ Could not parse JSON body for ${result?.validator}:`, parseError);
+                    return { 
+                        raw: resultBody, 
+                        error: 'JSON parse error',
+                        parseError: parseError.message 
+                    };
+                }
+            } else if (resultBody && typeof resultBody === 'object') {
+                console.log(`✅ Body already parsed for ${result?.validator}:`, resultBody);
+                return resultBody;
+            } else {
+                console.log(`ℹ️ No body found for ${result?.validator}`);
+                return { 
+                    error: 'No result body found',
+                    status: result?.result?.status || 'Unknown',
+                    statusCode: result?.result?.statusCode || null
+                };
+            }
+        } catch (error) {
+            console.error('❌ Error parsing validation body:', error);
+            return { 
+                error: 'Parse error', 
+                raw: result,
+                errorMessage: error.message 
+            };
+        }
+    };
+
+    // ✅ FIXED: Robust compliance overview calculation
+    const calculateComplianceOverview = (results) => {
+        try {
+            console.log('📊 Calculating compliance overview for', results.length, 'results');
+            
+            if (!results || results.length === 0) {
+                setComplianceOverview(null);
+                return;
+            }
+
+            let totalKsis = 0;
+            let passedKsis = 0;
+            let failedKsis = 0;
+            const validatorSummary = {};
+
+            results.forEach(result => {
+                const parsedBody = parseValidationBody(result);
+                const validator = result.validator?.toUpperCase() || 'UNKNOWN';
+
+                // Extract summary data
+                if (parsedBody.summary) {
+                    totalKsis += parsedBody.summary.total_ksis || 0;
+                    passedKsis += parsedBody.summary.passed || 0;
+                    failedKsis += parsedBody.summary.failed || 0;
+                    
+                    validatorSummary[validator] = {
+                        total: parsedBody.summary.total_ksis || 0,
+                        passed: parsedBody.summary.passed || 0,
+                        failed: parsedBody.summary.failed || 0,
+                        pass_rate: parsedBody.summary.pass_rate || 0
+                    };
+                } else {
+                    // Fallback: analyze individual results
+                    const individualResults = parsedBody.results || [];
+                    const validatorTotal = individualResults.length;
+                    const validatorPassed = individualResults.filter(r => r.assertion === true).length;
+                    const validatorFailed = validatorTotal - validatorPassed;
+
+                    totalKsis += validatorTotal;
+                    passedKsis += validatorPassed;
+                    failedKsis += validatorFailed;
+
+                    validatorSummary[validator] = {
+                        total: validatorTotal,
+                        passed: validatorPassed,
+                        failed: validatorFailed,
+                        pass_rate: validatorTotal > 0 ? (validatorPassed / validatorTotal) * 100 : 0
+                    };
                 }
             });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-            
-            const data = await response.json();
-            console.log('🏢 Tenants loaded:', data);
-            
-            // Extract tenant list from response
-            const tenants = data.tenants || data.items || [];
-            
-            // Format tenants for dropdown
-            const formattedTenants = tenants.map(tenant => ({
-                id: tenant.tenant_id || tenant.id,
-                name: tenant.organization_name || tenant.name || formatTenantName(tenant.tenant_id || tenant.id),
-                ksiCount: tenant.ksi_count || 0,
-                status: tenant.status || 'active'
-            }));
-            
-            // Add "All Tenants" option and fallback
-            const allTenantsOption = {
-                id: 'all',
-                name: 'All Tenants',
-                ksiCount: formattedTenants.reduce((sum, t) => sum + t.ksiCount, 0),
-                status: 'active'
+
+            const overallPassRate = totalKsis > 0 ? (passedKsis / totalKsis) * 100 : 0;
+
+            const overview = {
+                total_validators: results.length,
+                total_ksis: totalKsis,
+                passed_ksis: passedKsis,
+                failed_ksis: failedKsis,
+                overall_pass_rate: overallPassRate,
+                validator_breakdown: validatorSummary,
+                last_updated: new Date().toISOString()
             };
+
+            console.log('✅ Compliance overview calculated:', overview);
+            setComplianceOverview(overview);
+
+        } catch (error) {
+            console.error('❌ Error calculating compliance overview:', error);
+            setComplianceOverview(null);
+        }
+    };
+
+    // ✅ FIXED: Enhanced tenant loading
+    const loadTenants = useCallback(async () => {
+        try {
+            console.log('🏢 Loading available tenants...');
+            const response = await ksiService.getTenants();
             
-            if (formattedTenants.length === 0) {
-                // Fallback if API fails or no tenants
-                setAvailableTenants([
-                    { id: 'real-test', name: 'Real Test Tenant', ksiCount: 5, status: 'active' },
-                    allTenantsOption
-                ]);
+            const tenants = parseApiResponse(response, ['tenants']);
+            
+            if (tenants.length > 0) {
+                setAvailableTenants(tenants);
+                
+                // Auto-select riskuity-production if available, otherwise first tenant
+                const preferredTenant = tenants.includes('riskuity-production') 
+                    ? 'riskuity-production' 
+                    : tenants[0];
+                    
+                setSelectedTenant(preferredTenant);
+                console.log(`✅ Loaded ${tenants.length} tenants, selected: ${preferredTenant}`);
             } else {
-                setAvailableTenants([allTenantsOption, ...formattedTenants]);
+                console.log('ℹ️ No tenants found');
+                setAvailableTenants([]);
             }
-            
-            console.log(`✅ Loaded ${formattedTenants.length} tenants`);
             
         } catch (err) {
             console.error('❌ Error loading tenants:', err);
-            setError(`Failed to load tenants: ${err.message}`);
-            
-            // Fallback to default tenant if API fails
-            setAvailableTenants([
-                { id: 'real-test', name: 'Real Test Tenant', ksiCount: 5, status: 'active' },
-                { id: 'all', name: 'All Tenants', ksiCount: 5, status: 'active' }
-            ]);
-        } finally {
-            setTenantsLoading(false);
+            setError('Failed to load tenants');
+            setAvailableTenants([]);
         }
     }, []);
 
-    // Format tenant names for better display
-    const formatTenantName = (tenantId) => {
-        if (tenantId === 'all') return 'All Tenants';
-        if (tenantId === 'default') return 'Default Tenant';
-        if (tenantId === 'real-test') return 'Real Test Tenant';
-        
-        // Convert tenant-001 to "Tenant 001"
-        return tenantId.replace(/[-_]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-    };
-
-    // Fetch execution history
+    // ✅ FIXED: Enhanced execution history fetching
     const fetchExecutionHistory = useCallback(async () => {
+        if (!selectedTenant) return;
+
         try {
-            setLoading(true);
-            setError(null);
+            console.log(`📅 Fetching execution history for tenant: ${selectedTenant}`);
+            const response = await ksiService.getExecutionHistory(selectedTenant);
             
-            console.log(`🔍 Fetching execution history for tenant: ${selectedTenant}`);
+            const executions = parseApiResponse(response, ['data.executions', 'executions']);
             
-            const response = await ksiService.getExecutionHistory(selectedTenant, 10);
-            console.log('📊 Raw Execution History Response:', response);
+            // Sort by timestamp (newest first)
+            const sortedExecutions = executions
+                .filter(exec => exec && exec.execution_id)
+                .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
             
-            // Handle different response formats
-            let executions = [];
-            
-            if (response.success && response.data && response.data.executions) {
-                // Format: {success: true, data: {executions: [...]}}
-                executions = response.data.executions;
-                console.log('✅ Found executions in response.data.executions');
-            } else if (response.executions) {
-                // Format: {executions: [...]}
-                executions = response.executions;
-                console.log('✅ Found executions in response.executions');
-            } else if (response.items) {
-                // Format: {items: [...]}
-                executions = response.items;
-                console.log('✅ Found executions in response.items');
-            } else if (Array.isArray(response)) {
-                // Format: [...]
-                executions = response;
-                console.log('✅ Response is array of executions');
-            } else {
-                console.warn('⚠️ Unexpected response format:', response);
-                executions = [];
-            }
-            
-            console.log(`📈 Processed ${executions.length} execution records`);
-            
-            // Sort executions by timestamp (newest first)
-            executions.sort((a, b) => {
-                const timeA = new Date(a.timestamp || a.started_at || 0);
-                const timeB = new Date(b.timestamp || b.started_at || 0);
-                return timeB - timeA;
-            });
-            
-            setExecutionHistory(executions);
-            
-            if (executions.length === 0) {
-                console.log('ℹ️ No execution history found for this tenant');
-            }
+            setExecutionHistory(sortedExecutions);
+            console.log(`✅ Loaded ${sortedExecutions.length} executions`);
             
         } catch (err) {
             console.error('❌ Error fetching execution history:', err);
-            setError(`Failed to fetch execution history: ${err.message}`);
+            setError('Failed to load execution history');
             setExecutionHistory([]);
-        } finally {
-            setLoading(false);
         }
     }, [selectedTenant]);
 
-    // NEW: Fetch current KSI data for the selected tenant
+    // ✅ FIXED: Enhanced current KSI data fetching with multiple fallbacks
     const fetchCurrentKSIData = useCallback(async () => {
+        if (!selectedTenant) return;
+
         try {
-            setError(null);
-            
             console.log(`🔍 Fetching current KSI data for tenant: ${selectedTenant}`);
-            
-            // Call the results API to get current KSI status
             const response = await ksiService.getValidationResults(selectedTenant);
-            console.log('📊 Current KSI Data Response:', response);
             
-            if (response.success && response.data && response.data.validation_results) {
-                const results = response.data.validation_results;
+            // Use enhanced parsing with multiple possible paths
+            const results = parseApiResponse(response, [
+                'data.validation_results',
+                'data.validators_completed',
+                'validation_results',
+                'validators_completed'
+            ]);
+            
+            if (results.length > 0) {
+                console.log(`📊 Processing ${results.length} validation results`);
                 
-                // Process the results for display
+                // Process and enrich the results
                 const processedResults = results.map(result => {
-                    let resultBody = result.result?.body;
-                    let parsedBody = null;
-                    
-                    // Try to parse the JSON body if it's a string
-                    if (typeof resultBody === 'string') {
-                        try {
-                            parsedBody = JSON.parse(resultBody);
-                        } catch (e) {
-                            console.warn('Could not parse result body:', resultBody);
-                            parsedBody = { raw: resultBody };
-                        }
-                    } else {
-                        parsedBody = resultBody || {};
-                    }
+                    const parsedBody = parseValidationBody(result);
                     
                     return {
-                        ksi_id: `${result.validator?.toUpperCase()} Validator`,
-                        description: `${result.validator?.toUpperCase()} Category Validation`,
-                        status: result.status || 'Unknown',
+                        ksi_id: `${result.validator?.toUpperCase() || 'UNKNOWN'} Validator`,
+                        description: `${result.validator?.toUpperCase() || 'UNKNOWN'} Category Validation`,
+                        status: result.result?.status || 'Unknown',
+                        validator: result.validator,
+                        function_name: result.function_name,
+                        details: parsedBody,
+                        ksis_validated: parsedBody.ksis_validated || 0,
+                        summary: parsedBody.summary || null,
+                        individual_results: parsedBody.results || [],
+                        raw_result: result // Keep raw data for debugging
+                    };
+                });
+                
+                setValidationResults(processedResults);
+                calculateComplianceOverview(processedResults);
+                console.log(`✅ Successfully processed ${processedResults.length} validation results`);
+                
+            } else {
+                console.log('ℹ️ No current KSI data found for this tenant');
+                setValidationResults([]);
+                setComplianceOverview(null);
+            }
+            
+        } catch (err) {
+            console.error('❌ Error fetching current KSI data:', err);
+            // Don't show error for background loading
+            setValidationResults([]);
+            setComplianceOverview(null);
+        }
+    }, [selectedTenant]);
+
+    // Load tenants on component mount
+    useEffect(() => {
+        loadTenants();
+    }, [loadTenants]);
+
+    // Load data when selected tenant changes
+    useEffect(() => {
+        if (selectedTenant && availableTenants.length > 0) {
+            fetchExecutionHistory();
+            fetchCurrentKSIData();
+        }
+    }, [selectedTenant, availableTenants.length, fetchExecutionHistory, fetchCurrentKSIData]);
+
+    // ✅ CRITICAL FIX: Enhanced validation result fetching for specific execution
+    const fetchValidationResults = async (executionId) => {
+        try {
+            setLoading(true);
+            console.log(`🔍 Fetching detailed results for execution: ${executionId}`);
+            
+            // ✅ FIXED: Use correct method name with proper parameters
+            const response = await ksiService.getValidationResults(null, executionId);
+            const results = parseApiResponse(response, [
+                'data.validation_results',
+                'data.results',
+                'validation_results',
+                'results'
+            ]);
+            
+            if (results.length > 0) {
+                const processedResults = results.map(result => {
+                    const parsedBody = parseValidationBody(result);
+                    
+                    return {
+                        ksi_id: `${result.validator?.toUpperCase() || 'UNKNOWN'} Validator`,
+                        description: `${result.validator?.toUpperCase() || 'UNKNOWN'} Category Validation`,
+                        status: result.result?.status || 'Unknown',
                         validator: result.validator,
                         function_name: result.function_name,
                         details: parsedBody,
@@ -206,619 +336,337 @@ const KSIManager = () => {
                 
                 setValidationResults(processedResults);
                 calculateComplianceOverview(processedResults);
-                
-                console.log(`✅ Loaded ${results.length} current KSI results`);
+                console.log(`✅ Loaded detailed results for execution ${executionId}`);
             } else {
-                console.log('ℹ️ No current KSI data found for this tenant');
+                console.log(`ℹ️ No results found for execution ${executionId}`);
                 setValidationResults([]);
                 setComplianceOverview(null);
             }
             
         } catch (err) {
-            console.error('❌ Error fetching current KSI data:', err);
-            // Don't show error for this - it's just background loading
+            console.error('❌ Error fetching validation results:', err);
+            setError(`Failed to fetch results for execution ${executionId}`);
             setValidationResults([]);
             setComplianceOverview(null);
-        }
-    }, [selectedTenant]);
-
-    // Load tenants on component mount
-    useEffect(() => {
-        loadTenants();
-    }, [loadTenants]);
-
-    // Load execution history AND current KSI data when selected tenant changes
-    useEffect(() => {
-        if (selectedTenant && availableTenants.length > 0) {
-            fetchExecutionHistory();
-            fetchCurrentKSIData(); // AUTO-LOAD KSI DATA
-        }
-    }, [selectedTenant, availableTenants.length, fetchExecutionHistory, fetchCurrentKSIData]);
-
-    const fetchValidationResults = async (executionId) => {
-        try {
-            setLoading(true);
-            setError(null);
-            setSelectedExecutionId(executionId);
-            
-            console.log('🔍 Fetching results for execution:', executionId);
-            
-            // Find the execution in our current data first
-            const execution = executionHistory.find(exec => exec.execution_id === executionId);
-            
-            if (execution && execution.validation_results) {
-                console.log('🎯 Found validation results in execution data:', execution.validation_results);
-                
-                // Parse the nested validation results with rich AWS data
-                const resultsData = execution.validation_results.map(validationResult => {
-                    let resultBody = validationResult.result?.body;
-                    let parsedBody = null;
-                    
-                    // Try to parse the JSON body if it's a string
-                    if (typeof resultBody === 'string') {
-                        try {
-                            parsedBody = JSON.parse(resultBody);
-                        } catch (e) {
-                            console.warn('Could not parse result body:', resultBody);
-                            parsedBody = { raw: resultBody };
-                        }
-                    } else {
-                        parsedBody = resultBody || {};
-                    }
-                    
-                    return {
-                        ksi_id: `${validationResult.validator?.toUpperCase()} Validator`,
-                        description: `${validationResult.validator?.toUpperCase()} Category Validation`,
-                        status: validationResult.status || 'Unknown',
-                        validator: validationResult.validator,
-                        function_name: validationResult.function_name,
-                        details: parsedBody,
-                        ksis_validated: parsedBody.ksis_validated || 0,
-                        summary: parsedBody.summary || null,
-                        individual_results: parsedBody.results || []
-                    };
-                });
-                
-                console.log('📊 Processed Results Data:', resultsData);
-                setValidationResults(resultsData);
-                
-                // Calculate compliance overview
-                calculateComplianceOverview(resultsData);
-            } else {
-                // Try to fetch from API if not in current data
-                const response = await ksiService.getValidationResults(selectedTenant, executionId);
-                console.log('🎯 API Validation Results Response:', response);
-                
-                let resultsData = response.results || response.items || [];
-                setValidationResults(resultsData);
-                
-                if (resultsData.length === 0) {
-                    setError('No validation results found for this execution');
-                }
-            }
-            
-        } catch (err) {
-            console.error('Error fetching validation results:', err);
-            setError(`Failed to fetch validation results: ${err.message}`);
         } finally {
             setLoading(false);
         }
     };
 
-    const calculateComplianceOverview = (results) => {
-        if (!results || results.length === 0) return;
-
-        const overview = {
-            totalValidators: results.length,
-            passedValidators: 0,
-            totalKSIs: 0,
-            passedKSIs: 0,
-            awsResources: {
-                subnets: 0,
-                availabilityZones: [],
-                kmsKeys: 0,
-                iamUsers: 0,
-                iamRoles: 0,
-                cloudwatchAlarms: 0,
-                cloudtrailTrails: 0,
-                hostedZones: 0,
-                cloudformationStacks: 0
-            },
-            categoryResults: {}
-        };
-
-        results.forEach(result => {
-            if (result.status === 'SUCCESS' && result.details?.statusCode === 200) {
-                overview.passedValidators++;
-            }
-
-            if (result.summary) {
-                overview.totalKSIs += result.summary.total_ksis || 0;
-                overview.passedKSIs += result.summary.passed || 0;
-            }
-
-            // Extract AWS resource counts from individual results
-            if (result.individual_results) {
-                result.individual_results.forEach(ksi => {
-                    if (ksi.cli_command_details) {
-                        ksi.cli_command_details.forEach(cmd => {
-                            if (cmd.data) {
-                                // Extract resource counts based on command type
-                                if (cmd.command.includes('describe_subnets')) {
-                                    overview.awsResources.subnets = cmd.data.subnet_count || 0;
-                                    if (cmd.data.availability_zones) {
-                                        overview.awsResources.availabilityZones = cmd.data.availability_zones;
-                                    }
-                                }
-                                if (cmd.command.includes('list_keys')) {
-                                    overview.awsResources.kmsKeys = cmd.data.key_count || 0;
-                                }
-                                if (cmd.command.includes('list_users')) {
-                                    overview.awsResources.iamUsers = cmd.data.user_count || 0;
-                                }
-                                if (cmd.command.includes('list_roles')) {
-                                    overview.awsResources.iamRoles = cmd.data.role_count || 0;
-                                }
-                                if (cmd.command.includes('describe_alarms')) {
-                                    overview.awsResources.cloudwatchAlarms = cmd.data.alarm_count || 0;
-                                }
-                                if (cmd.command.includes('describe_trails')) {
-                                    overview.awsResources.cloudtrailTrails = cmd.data.trail_count || 0;
-                                }
-                                if (cmd.command.includes('list_hosted_zones')) {
-                                    overview.awsResources.hostedZones = cmd.data.hosted_zones || 0;
-                                }
-                                if (cmd.command.includes('list_stacks')) {
-                                    overview.awsResources.cloudformationStacks = cmd.data.stack_count || 0;
-                                }
-                            }
-                        });
-                    }
-                });
-            }
-
-            overview.categoryResults[result.validator] = result;
-        });
-
-        overview.validatorPassRate = overview.totalValidators > 0 ? 
-            Math.round((overview.passedValidators / overview.totalValidators) * 100) : 0;
-        overview.ksiPassRate = overview.totalKSIs > 0 ? 
-            Math.round((overview.passedKSIs / overview.totalKSIs) * 100) : 0;
-
-        setComplianceOverview(overview);
-    };
-
+    // ✅ FIXED: Enhanced validation triggering with polling
     const triggerValidation = async () => {
         try {
-            setLoading(true);
+            setIsValidating(true);
             setError(null);
-            setValidationResults([]);
-            setComplianceOverview(null);
             
             console.log(`🚀 Triggering validation for tenant: ${selectedTenant}`);
+            const response = await ksiService.triggerValidation(selectedTenant);
             
-            const response = await ksiService.triggerValidation(selectedTenant, 'manual');
-            console.log('Validation Triggered:', response);
-            
-            setLastExecution(response);
-            
-            // Refresh execution history and KSI data after a brief delay
-            setTimeout(() => {
-                fetchExecutionHistory();
-                fetchCurrentKSIData();
-            }, 2000);
+            if (response.success) {
+                console.log('✅ Validation triggered successfully:', response);
+                
+                // Start polling for updates
+                const pollInterval = setInterval(async () => {
+                    await fetchExecutionHistory();
+                    await fetchCurrentKSIData();
+                }, 5000); // Poll every 5 seconds
+                
+                // Stop polling after 2 minutes
+                setTimeout(() => {
+                    clearInterval(pollInterval);
+                    setIsValidating(false);
+                }, 120000);
+                
+            } else {
+                throw new Error(response.message || 'Validation trigger failed');
+            }
             
         } catch (err) {
-            console.error('Error triggering validation:', err);
+            console.error('❌ Error triggering validation:', err);
             setError(`Failed to trigger validation: ${err.message}`);
-        } finally {
-            setLoading(false);
+            setIsValidating(false);
         }
     };
 
-    const formatTimestamp = (timestamp) => {
-        if (!timestamp) return 'N/A';
-        return new Date(timestamp).toLocaleString();
-    };
-
-    const getStatusColor = (status) => {
-        switch (status?.toLowerCase()) {
-            case 'pass': case 'passed': case 'success': case 'completed':
-                return 'text-green-600 bg-green-100';
-            case 'fail': case 'failed': case 'error':
-                return 'text-red-600 bg-red-100';
-            case 'running': case 'in_progress': case 'triggered':
-                return 'text-blue-600 bg-blue-100';
-            case 'warning': case 'partial':
-                return 'text-yellow-600 bg-yellow-100';
-            default:
-                return 'text-gray-600 bg-gray-100';
-        }
-    };
-
-    const closeResults = () => {
+    // Handle tenant selection change
+    const handleTenantChange = (event) => {
+        const newTenant = event.target.value;
+        console.log(`🏢 Switching to tenant: ${newTenant}`);
+        setSelectedTenant(newTenant);
         setValidationResults([]);
-        setSelectedExecutionId(null);
         setComplianceOverview(null);
+        setExecutionHistory([]);
+        setError(null);
+    };
+
+    // Toggle execution details
+    const toggleExecutionDetails = (executionId) => {
+        if (expandedExecution === executionId) {
+            setExpandedExecution(null);
+        } else {
+            setExpandedExecution(executionId);
+            fetchValidationResults(executionId);
+        }
     };
 
     return (
-        <div className="max-w-7xl mx-auto p-6 space-y-6">
+        <div className="space-y-6">
             {/* Header */}
-            <div className="bg-gradient-to-r from-blue-600 to-blue-800 rounded-lg shadow-lg p-6 text-white">
-                <div className="flex justify-between items-center">
-                    <div>
-                        <h1 className="text-3xl font-bold">
-                            🛡️ Enterprise KSI Validator
-                        </h1>
-                        <p className="mt-1 text-sm text-blue-100">
-                            FedRAMP 20x Key Security Indicator Validation Platform
-                        </p>
-                    </div>
-                    <div className="text-right">
-                        <div className="text-sm text-blue-200">Environment</div>
-                        <div className="font-semibold text-white">
-                            {process.env.REACT_APP_ENVIRONMENT || 'development'}
-                        </div>
-                    </div>
-                </div>
+            <div className="bg-white shadow rounded-lg px-6 py-4">
+                <h1 className="text-2xl font-bold text-gray-900">KSI Validator Platform</h1>
+                <p className="text-gray-600">Monitor and manage FedRAMP compliance validation</p>
             </div>
 
             {/* Error Display */}
             {error && (
-                <div className="bg-red-50 border border-red-200 rounded-md p-4">
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
                     <div className="flex">
-                        <div className="text-red-400">⚠️</div>
+                        <div className="flex-shrink-0">
+                            <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                            </svg>
+                        </div>
                         <div className="ml-3">
                             <h3 className="text-sm font-medium text-red-800">Error</h3>
-                            <div className="mt-1 text-sm text-red-700">{error}</div>
+                            <div className="text-sm text-red-700">{error}</div>
+                        </div>
+                        <div className="ml-auto">
+                            <button 
+                                onClick={() => setError(null)}
+                                className="text-red-400 hover:text-red-600"
+                            >
+                                <span className="sr-only">Dismiss</span>
+                                <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                                </svg>
+                            </button>
                         </div>
                     </div>
                 </div>
             )}
 
             {/* Controls */}
-            <div className="bg-white shadow rounded-lg p-6">
-                <div className="flex flex-wrap items-center gap-4">
-                    <div className="flex-1 min-w-64">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Tenant ID {tenantsLoading && <span className="text-blue-500">(Loading...)</span>}
+            <div className="bg-white shadow rounded-lg px-6 py-4">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between space-y-4 md:space-y-0">
+                    <div className="flex-1 max-w-md">
+                        <label htmlFor="tenant-select" className="block text-sm font-medium text-gray-700 mb-2">
+                            Select Tenant
                         </label>
-                        <div className="flex gap-2">
-                            <select
-                                value={selectedTenant}
-                                onChange={(e) => setSelectedTenant(e.target.value)}
-                                disabled={tenantsLoading}
-                                className="flex-1 p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
-                            >
-                                {availableTenants.map((tenant) => (
-                                    <option key={tenant.id} value={tenant.id}>
-                                        {tenant.name} {tenant.ksiCount > 0 && `(${tenant.ksiCount} KSIs)`}
-                                    </option>
-                                ))}
-                            </select>
-                            <button
-                                onClick={loadTenants}
-                                disabled={tenantsLoading}
-                                className="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 disabled:bg-gray-100"
-                                title="Reload tenant list"
-                            >
-                                🔄
-                            </button>
-                        </div>
+                        <select
+                            id="tenant-select"
+                            value={selectedTenant}
+                            onChange={handleTenantChange}
+                            className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                        >
+                            <option value="">Select a tenant...</option>
+                            {availableTenants.map(tenant => (
+                                <option key={tenant} value={tenant}>{tenant}</option>
+                            ))}
+                        </select>
                     </div>
                     
-                    <div className="flex gap-2">
-                        <button
-                            onClick={triggerValidation}
-                            disabled={loading || tenantsLoading}
-                            className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-6 py-2 rounded-md font-medium transition-colors"
-                        >
-                            {loading ? 'Triggering...' : '🔍 Trigger Validation'}
-                        </button>
-                        
+                    <div className="flex space-x-3">
                         <button
                             onClick={() => {
                                 fetchExecutionHistory();
                                 fetchCurrentKSIData();
                             }}
-                            disabled={loading || tenantsLoading}
-                            className="bg-gray-600 hover:bg-gray-700 disabled:bg-gray-400 text-white px-6 py-2 rounded-md font-medium transition-colors"
+                            disabled={!selectedTenant || loading}
+                            className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            {loading ? 'Loading...' : '📊 Refresh History'}
+                            {loading ? 'Refreshing...' : 'Refresh'}
+                        </button>
+                        
+                        <button
+                            onClick={triggerValidation}
+                            disabled={!selectedTenant || isValidating}
+                            className="px-4 py-2 bg-blue-600 border border-transparent rounded-md shadow-sm text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {isValidating ? 'Validating...' : 'Trigger Validation'}
                         </button>
                     </div>
                 </div>
-
-                {lastExecution && (
-                    <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-md">
-                        <h4 className="font-medium text-blue-900">Last Execution</h4>
-                        <p className="text-sm text-blue-700">
-                            Execution ID: {lastExecution.execution_id} | 
-                            Status: {lastExecution.status} | 
-                            Validators: {lastExecution.validators_invoked?.join(', ') || 'N/A'}
-                        </p>
-                    </div>
-                )}
             </div>
 
-            {/* Compliance Overview Dashboard */}
+            {/* Compliance Overview */}
             {complianceOverview && (
-                <div className="bg-white shadow rounded-lg p-6">
-                    <h2 className="text-xl font-semibold text-gray-900 mb-6">
-                        🏆 Compliance Overview
-                    </h2>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-                        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                            <div className="text-2xl font-bold text-green-600">{complianceOverview.validatorPassRate}%</div>
-                            <div className="text-sm text-green-700">Validator Success Rate</div>
-                            <div className="text-xs text-green-600">{complianceOverview.passedValidators}/{complianceOverview.totalValidators} validators</div>
+                <div className="bg-white shadow rounded-lg px-6 py-4">
+                    <h2 className="text-lg font-semibold text-gray-900 mb-4">Compliance Overview</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div className="text-center">
+                            <div className="text-2xl font-bold text-blue-600">{complianceOverview.total_validators}</div>
+                            <div className="text-sm text-gray-500">Total Validators</div>
                         </div>
-                        
-                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                            <div className="text-2xl font-bold text-blue-600">{complianceOverview.ksiPassRate}%</div>
-                            <div className="text-sm text-blue-700">KSI Pass Rate</div>
-                            <div className="text-xs text-blue-600">{complianceOverview.passedKSIs}/{complianceOverview.totalKSIs} KSIs</div>
+                        <div className="text-center">
+                            <div className="text-2xl font-bold text-green-600">{complianceOverview.passed_ksis}</div>
+                            <div className="text-sm text-gray-500">Passed KSIs</div>
                         </div>
-                        
-                        <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-                            <div className="text-2xl font-bold text-purple-600">{complianceOverview.awsResources.availabilityZones?.length || 0}</div>
-                            <div className="text-sm text-purple-700">Availability Zones</div>
-                            <div className="text-xs text-purple-600">Multi-AZ deployment</div>
+                        <div className="text-center">
+                            <div className="text-2xl font-bold text-red-600">{complianceOverview.failed_ksis}</div>
+                            <div className="text-sm text-gray-500">Failed KSIs</div>
                         </div>
-                        
-                        <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
-                            <div className="text-2xl font-bold text-orange-600">{Object.values(complianceOverview.awsResources).reduce((sum, val) => typeof val === 'number' ? sum + val : sum, 0)}</div>
-                            <div className="text-sm text-orange-700">Total AWS Resources</div>
-                            <div className="text-xs text-orange-600">Scanned & validated</div>
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        <div className="bg-gray-50 rounded-lg p-4">
-                            <h4 className="font-medium text-gray-900 mb-2">🏗️ Network Architecture</h4>
-                            <div className="space-y-1 text-sm">
-                                <div>Subnets: <span className="font-semibold">{complianceOverview.awsResources.subnets}</span></div>
-                                <div>Availability Zones: <span className="font-semibold">{complianceOverview.awsResources.availabilityZones?.length || 0}</span></div>
-                                <div>Hosted Zones: <span className="font-semibold">{complianceOverview.awsResources.hostedZones}</span></div>
-                            </div>
-                        </div>
-                        
-                        <div className="bg-gray-50 rounded-lg p-4">
-                            <h4 className="font-medium text-gray-900 mb-2">🔐 Security & Identity</h4>
-                            <div className="space-y-1 text-sm">
-                                <div>KMS Keys: <span className="font-semibold">{complianceOverview.awsResources.kmsKeys}</span></div>
-                                <div>IAM Users: <span className="font-semibold">{complianceOverview.awsResources.iamUsers}</span></div>
-                                <div>IAM Roles: <span className="font-semibold">{complianceOverview.awsResources.iamRoles}</span></div>
-                            </div>
-                        </div>
-                        
-                        <div className="bg-gray-50 rounded-lg p-4">
-                            <h4 className="font-medium text-gray-900 mb-2">📊 Monitoring & Management</h4>
-                            <div className="space-y-1 text-sm">
-                                <div>CloudWatch Alarms: <span className="font-semibold">{complianceOverview.awsResources.cloudwatchAlarms}</span></div>
-                                <div>CloudTrail Trails: <span className="font-semibold">{complianceOverview.awsResources.cloudtrailTrails}</span></div>
-                                <div>CloudFormation Stacks: <span className="font-semibold">{complianceOverview.awsResources.cloudformationStacks}</span></div>
-                            </div>
+                        <div className="text-center">
+                            <div className="text-2xl font-bold text-purple-600">{complianceOverview.overall_pass_rate.toFixed(1)}%</div>
+                            <div className="text-sm text-gray-500">Pass Rate</div>
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* KSI Categories Overview - NOW SHOWS CURRENT DATA */}
-            <div className="bg-white shadow rounded-lg p-6">
-                <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                    📋 KSI Categories
-                </h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {Object.entries(ksiCategories).map(([code, info]) => {
-                        const result = complianceOverview?.categoryResults[code.toLowerCase()];
-                        const isWorking = result && result.status === 'SUCCESS' && result.details?.statusCode === 200;
-                        
-                        return (
-                            <div key={code} className={`border rounded-lg p-4 ${isWorking ? 'border-green-200 bg-green-50' : 'border-gray-200'}`}>
+            {/* Execution History */}
+            {executionHistory.length > 0 && (
+                <div className="bg-white shadow rounded-lg px-6 py-4">
+                    <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Executions</h2>
+                    <div className="space-y-3">
+                        {executionHistory.slice(0, 5).map((execution, index) => (
+                            <div key={index} className="border border-gray-200 rounded-lg p-4">
                                 <div className="flex items-center justify-between">
                                     <div>
-                                        <div className="font-semibold text-lg text-blue-600">{code}</div>
-                                        <div className="text-sm text-gray-600">{info.name}</div>
-                                        {result && (
-                                            <div className="text-xs mt-1">
-                                                <span className={`px-2 py-1 rounded-full ${isWorking ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                                    {isWorking ? '✅ Active' : '❌ Issue'}
-                                                </span>
-                                            </div>
-                                        )}
-                                    </div>
-                                    <div className="text-2xl">{info.icon}</div>
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
-
-            {/* Execution History */}
-            <div className="bg-white shadow rounded-lg p-6">
-                <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                    📈 Execution History
-                </h2>
-                
-                {loading && executionHistory.length === 0 ? (
-                    <div className="text-center py-8 text-gray-500">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"></div>
-                        Loading execution history...
-                    </div>
-                ) : executionHistory.length === 0 ? (
-                    <div className="text-center py-8 text-gray-500">
-                        No execution history found for this tenant.
-                    </div>
-                ) : (
-                    <div className="space-y-3 max-h-96 overflow-y-auto">
-                        {executionHistory.map((execution, index) => (
-                            <div
-                                key={execution.execution_id || index}
-                                className={`p-3 border rounded-md cursor-pointer transition-colors ${
-                                    selectedExecutionId === execution.execution_id
-                                        ? 'border-blue-500 bg-blue-50'
-                                        : 'border-gray-200 hover:border-gray-300'
-                                }`}
-                                onClick={() => fetchValidationResults(execution.execution_id)}
-                            >
-                                <div className="flex justify-between items-start">
-                                    <div className="flex-1">
-                                        <div className="text-sm font-medium text-gray-900">
-                                            {execution.execution_id || 'Unknown ID'}
+                                        <div className="font-medium text-gray-900">
+                                            Execution {execution.execution_id?.substring(0, 8)}...
                                         </div>
-                                        <div className="text-xs text-gray-500 mt-1">
-                                            {execution.timestamp || execution.started_at || 'No timestamp'}
+                                        <div className="text-sm text-gray-500">
+                                            {new Date(execution.timestamp).toLocaleString()}
                                         </div>
-                                        {execution.validators_invoked && (
-                                            <div className="text-xs text-gray-600 mt-1">
-                                                Validators: {execution.validators_invoked.join(', ')}
-                                            </div>
-                                        )}
                                     </div>
-                                    <div className="ml-2">
-                                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${getStatusColor(execution.status)}`}>
+                                    <div className="text-right">
+                                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                            execution.status === 'COMPLETED' 
+                                                ? 'bg-green-100 text-green-800' 
+                                                : execution.status === 'FAILED'
+                                                ? 'bg-red-100 text-red-800'
+                                                : 'bg-yellow-100 text-yellow-800'
+                                        }`}>
                                             {execution.status}
                                         </span>
+                                        <div className="text-xs text-gray-500 mt-1">
+                                            {execution.validators_completed?.length || 0}/5 validators
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         ))}
                     </div>
-                )}
-            </div>
+                </div>
+            )}
 
-            {/* Validation Results - Enhanced for Rich AWS Data */}
+            {/* Current Validation Results */}
             {validationResults.length > 0 && (
-                <div className="bg-white shadow rounded-lg p-6">
-                    <div className="flex justify-between items-center mb-4">
-                        <h2 className="text-xl font-semibold text-gray-900">
-                            🔍 Validation Results for {selectedExecutionId ? `Execution: ${selectedExecutionId.substring(0, 8)}...` : 'Current KSI Status'}
-                        </h2>
-                        <button
-                            onClick={closeResults}
-                            className="text-gray-400 hover:text-gray-600 text-sm"
-                        >
-                            ✕ Close
-                        </button>
-                    </div>
-                    
-                    <div className="space-y-6">
+                <div className="bg-white shadow rounded-lg px-6 py-4">
+                    <h2 className="text-lg font-semibold text-gray-900 mb-4">Current Validation Results</h2>
+                    <div className="space-y-4">
                         {validationResults.map((result, index) => (
-                            <div key={index} className="border border-gray-200 rounded-lg p-6">
-                                <div className="flex justify-between items-start mb-4">
+                            <div key={index} className="border border-gray-200 rounded-lg p-4">
+                                <div className="flex items-center justify-between mb-3">
                                     <div>
-                                        <h3 className="font-semibold text-xl text-blue-600">{result.ksi_id}</h3>
-                                        <p className="text-gray-600 mt-1">{result.description}</p>
-                                        {result.function_name && (
-                                            <p className="text-xs text-gray-500 mt-1">Function: {result.function_name}</p>
-                                        )}
+                                        <h3 className="font-medium text-gray-900">{result.ksi_id}</h3>
+                                        <p className="text-sm text-gray-500">{result.description}</p>
                                     </div>
-                                    <span className={`px-3 py-1 text-sm font-semibold rounded-full ${getStatusColor(result.status)}`}>
+                                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                        result.status === 'SUCCESS' 
+                                            ? 'bg-green-100 text-green-800' 
+                                            : 'bg-red-100 text-red-800'
+                                    }`}>
                                         {result.status}
                                     </span>
                                 </div>
-
-                                {/* Enhanced Summary with AWS Resource Counts */}
+                                
                                 {result.summary && (
-                                    <div className="bg-gray-50 rounded-lg p-4 mb-4">
-                                        <h4 className="font-medium text-gray-900 mb-2">Summary</h4>
-                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                                            <div>
-                                                <span className="text-gray-500">Total KSIs:</span>
-                                                <span className="ml-2 font-semibold">{result.summary.total_ksis || 0}</span>
-                                            </div>
-                                            <div>
-                                                <span className="text-gray-500">Passed:</span>
-                                                <span className="ml-2 font-semibold text-green-600">{result.summary.passed || 0}</span>
-                                            </div>
-                                            <div>
-                                                <span className="text-gray-500">Failed:</span>
-                                                <span className="ml-2 font-semibold text-red-600">{result.summary.failed || 0}</span>
-                                            </div>
-                                            <div>
-                                                <span className="text-gray-500">Pass Rate:</span>
-                                                <span className="ml-2 font-semibold">{result.summary.pass_rate || 0}%</span>
-                                            </div>
+                                    <div className="grid grid-cols-4 gap-4 text-sm mb-3">
+                                        <div>
+                                            <span className="text-gray-500">KSIs:</span>
+                                            <span className="ml-1 font-medium">{result.summary.total_ksis}</span>
+                                        </div>
+                                        <div>
+                                            <span className="text-gray-500">Passed:</span>
+                                            <span className="ml-1 font-medium text-green-600">{result.summary.passed}</span>
+                                        </div>
+                                        <div>
+                                            <span className="text-gray-500">Failed:</span>
+                                            <span className="ml-1 font-medium text-red-600">{result.summary.failed}</span>
+                                        </div>
+                                        <div>
+                                            <span className="text-gray-500">Pass Rate:</span>
+                                            <span className="ml-1 font-medium">{result.summary.pass_rate}%</span>
                                         </div>
                                     </div>
                                 )}
-
-                                {/* Individual KSI Results with AWS Resource Details */}
+                                
+                                {/* Individual KSI Results */}
                                 {result.individual_results && result.individual_results.length > 0 && (
-                                    <div className="mb-4">
-                                        <h4 className="font-medium text-gray-900 mb-3">AWS Resource Validation Results</h4>
-                                        <div className="space-y-4">
-                                            {result.individual_results.map((ksi, ksiIndex) => (
-                                                <div key={ksiIndex} className="border border-gray-100 rounded-lg p-4">
-                                                    {/* KSI Header */}
-                                                    <div className="flex justify-between items-center mb-3">
-                                                        <div>
-                                                            <span className="font-semibold text-lg">{ksi.ksi_id}</span>
-                                                            {ksi.assertion_reason && (
-                                                                <p className="text-sm text-gray-600 mt-1">{ksi.assertion_reason}</p>
-                                                            )}
-                                                        </div>
-                                                        <span className={`px-2 py-1 text-xs font-semibold rounded ${ksi.assertion ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                                            {ksi.assertion ? 'PASS' : 'FAIL'}
-                                                        </span>
-                                                    </div>
-
-                                                    {/* AWS Resource Details */}
-                                                    {ksi.cli_command_details && (
-                                                        <div className="bg-blue-50 rounded-lg p-3 mb-3">
-                                                            <h5 className="font-medium text-blue-800 text-sm mb-2">🛡️ AWS Resources Validated</h5>
-                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                                {ksi.cli_command_details.map((cmd, cmdIdx) => (
-                                                                    <div key={cmdIdx} className="bg-white p-3 rounded border">
-                                                                        <div className="text-xs font-medium text-gray-700 mb-1">{cmd.note}</div>
-                                                                        {cmd.data && (
-                                                                            <div className="text-sm space-y-1">
-                                                                                {Object.entries(cmd.data).map(([key, value]) => (
-                                                                                    <div key={key} className="flex justify-between">
-                                                                                        <span className="text-gray-600 capitalize">
-                                                                                            {key.replace(/_/g, ' ')}:
-                                                                                        </span>
-                                                                                        <span className="font-semibold">
-                                                                                            {Array.isArray(value) ? value.join(', ') : value}
-                                                                                        </span>
-                                                                                    </div>
-                                                                                ))}
-                                                                            </div>
-                                                                        )}
-                                                                        <div className="text-xs text-gray-500 mt-2 font-mono">
-                                                                            {cmd.command}
-                                                                        </div>
-                                                                    </div>
-                                                                ))}
-                                                            </div>
-                                                        </div>
-                                                    )}
+                                    <div className="border-t border-gray-100 pt-3">
+                                        <h4 className="font-medium text-gray-900 mb-3">Detailed Results</h4>
+                                        {result.individual_results.map((ksi, ksiIndex) => (
+                                            <div key={ksiIndex} className="mb-3 p-3 bg-gray-50 rounded">
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <span className="font-semibold">{ksi.ksi_id}</span>
+                                                    <span className={`px-2 py-1 text-xs font-semibold rounded ${
+                                                        ksi.assertion ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                                                    }`}>
+                                                        {ksi.assertion ? 'PASS' : 'FAIL'}
+                                                    </span>
                                                 </div>
-                                            ))}
-                                        </div>
+                                                {ksi.assertion_reason && (
+                                                    <p className="text-sm text-gray-600 mb-2">{ksi.assertion_reason}</p>
+                                                )}
+                                                
+                                                {/* Command Details */}
+                                                {ksi.cli_command_details && ksi.cli_command_details.length > 0 && (
+                                                    <div className="space-y-2">
+                                                        <h5 className="text-xs font-medium text-gray-700 uppercase tracking-wide">
+                                                            Command Details
+                                                        </h5>
+                                                        {ksi.cli_command_details.map((cmd, cmdIndex) => (
+                                                            <div key={cmdIndex} className="bg-white border rounded p-2">
+                                                                <div className="flex justify-between items-start mb-1">
+                                                                    <code className="text-xs text-blue-600 flex-1">
+                                                                        {cmd.command}
+                                                                    </code>
+                                                                    <span className={`ml-2 px-1 py-0.5 text-xs rounded ${
+                                                                        cmd.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                                                                    }`}>
+                                                                        {cmd.success ? '✓' : '✗'}
+                                                                    </span>
+                                                                </div>
+                                                                {cmd.note && (
+                                                                    <p className="text-xs text-gray-500 mb-1">{cmd.note}</p>
+                                                                )}
+                                                                {cmd.data && (
+                                                                    <div className="text-xs bg-gray-100 rounded p-1 mt-1">
+                                                                        <strong>Results:</strong>
+                                                                        <pre className="mt-1 whitespace-pre-wrap">
+                                                                            {JSON.stringify(cmd.data, null, 2)}
+                                                                        </pre>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
                                     </div>
-                                )}
-
-                                {/* Raw Details (Collapsible) */}
-                                {result.details && (
-                                    <details className="mt-4">
-                                        <summary className="cursor-pointer text-sm font-medium text-gray-700 hover:text-gray-900">
-                                            🔍 View Raw Details
-                                        </summary>
-                                        <div className="mt-2 p-3 bg-gray-50 rounded text-xs overflow-x-auto">
-                                            <pre className="whitespace-pre-wrap">
-                                                {JSON.stringify(result.details, null, 2)}
-                                            </pre>
-                                        </div>
-                                    </details>
                                 )}
                             </div>
                         ))}
                     </div>
+                </div>
+            )}
+
+            {/* Empty State */}
+            {!selectedTenant && (
+                <div className="bg-white shadow rounded-lg px-6 py-8 text-center">
+                    <p className="text-gray-500">Please select a tenant to view validation results.</p>
+                </div>
+            )}
+
+            {selectedTenant && !loading && executionHistory.length === 0 && validationResults.length === 0 && (
+                <div className="bg-white shadow rounded-lg px-6 py-8 text-center">
+                    <p className="text-gray-500">
+                        No validation data available for {selectedTenant}. 
+                        <br />
+                        Click "Trigger Validation" to start a new validation run.
+                    </p>
                 </div>
             )}
         </div>
