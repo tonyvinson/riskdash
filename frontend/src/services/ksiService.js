@@ -1,9 +1,9 @@
 // frontend/src/services/ksiService.js - Enhanced with Tenant Management
 import axios from 'axios';
 
-// API Configuration
+// API Configuration - FIXED to use production URL
 const API_CONFIG = {
-  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:3001',
+  baseURL: process.env.REACT_APP_API_URL || 'https://d5804hjt80.execute-api.us-gov-west-1.amazonaws.com/production',
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
@@ -121,7 +121,7 @@ export const ksiService = {
    */
   getTenants: async () => {
     try {
-      const response = await apiClient.get('/api/tenant/list');
+      const response = await apiClient.get('/api/ksi/tenants');
       return response.data;
     } catch (error) {
       throw new Error(`Failed to fetch tenants: ${error.message}`);

@@ -31,7 +31,7 @@ const KSIManager = () => {
             
             console.log('🏢 Loading tenants from API...');
             
-            // Call the tenants endpoint (you'll need to add this to ksiService)
+            // Call the tenants endpoint
             const response = await fetch(`${process.env.REACT_APP_API_URL || 'https://d5804hjt80.execute-api.us-gov-west-1.amazonaws.com/production'}/api/ksi/tenants`, {
                 method: 'GET',
                 headers: {
@@ -101,78 +101,139 @@ const KSIManager = () => {
         return tenantId.replace(/[-_]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
     };
 
-
-    // Replace the fetchExecutionHistory function in KSIManager.js with this:
-
-const fetchExecutionHistory = useCallback(async () => {
-    try {
-        setLoading(true);
-        setError(null);
-        
-        console.log(`🔍 Fetching execution history for tenant: ${selectedTenant}`);
-        
-        const response = await ksiService.getExecutionHistory(selectedTenant, 10);
-        console.log('📊 Raw Execution History Response:', response);
-        
-        // Handle different response formats
-        let executions = [];
-        
-        if (response.success && response.data && response.data.executions) {
-            // Format: {success: true, data: {executions: [...]}}
-            executions = response.data.executions;
-            console.log('✅ Found executions in response.data.executions');
-        } else if (response.executions) {
-            // Format: {executions: [...]}
-            executions = response.executions;
-            console.log('✅ Found executions in response.executions');
-        } else if (response.items) {
-            // Format: {items: [...]}
-            executions = response.items;
-            console.log('✅ Found executions in response.items');
-        } else if (Array.isArray(response)) {
-            // Format: [...]
-            executions = response;
-            console.log('✅ Response is array of executions');
-        } else {
-            console.warn('⚠️ Unexpected response format:', response);
-            executions = [];
+    // Fetch execution history
+    const fetchExecutionHistory = useCallback(async () => {
+        try {
+            setLoading(true);
+            setError(null);
+            
+            console.log(`🔍 Fetching execution history for tenant: ${selectedTenant}`);
+            
+            const response = await ksiService.getExecutionHistory(selectedTenant, 10);
+            console.log('📊 Raw Execution History Response:', response);
+            
+            // Handle different response formats
+            let executions = [];
+            
+            if (response.success && response.data && response.data.executions) {
+                // Format: {success: true, data: {executions: [...]}}
+                executions = response.data.executions;
+                console.log('✅ Found executions in response.data.executions');
+            } else if (response.executions) {
+                // Format: {executions: [...]}
+                executions = response.executions;
+                console.log('✅ Found executions in response.executions');
+            } else if (response.items) {
+                // Format: {items: [...]}
+                executions = response.items;
+                console.log('✅ Found executions in response.items');
+            } else if (Array.isArray(response)) {
+                // Format: [...]
+                executions = response;
+                console.log('✅ Response is array of executions');
+            } else {
+                console.warn('⚠️ Unexpected response format:', response);
+                executions = [];
+            }
+            
+            console.log(`📈 Processed ${executions.length} execution records`);
+            
+            // Sort executions by timestamp (newest first)
+            executions.sort((a, b) => {
+                const timeA = new Date(a.timestamp || a.started_at || 0);
+                const timeB = new Date(b.timestamp || b.started_at || 0);
+                return timeB - timeA;
+            });
+            
+            setExecutionHistory(executions);
+            
+            if (executions.length === 0) {
+                console.log('ℹ️ No execution history found for this tenant');
+            }
+            
+        } catch (err) {
+            console.error('❌ Error fetching execution history:', err);
+            setError(`Failed to fetch execution history: ${err.message}`);
+            setExecutionHistory([]);
+        } finally {
+            setLoading(false);
         }
-        
-        console.log(`📈 Processed ${executions.length} execution records`);
-        
-        // Sort executions by timestamp (newest first)
-        executions.sort((a, b) => {
-            const timeA = new Date(a.timestamp || a.started_at || 0);
-            const timeB = new Date(b.timestamp || b.started_at || 0);
-            return timeB - timeA;
-        });
-        
-        setExecutionHistory(executions);
-        
-        if (executions.length === 0) {
-            console.log('ℹ️ No execution history found for this tenant');
+    }, [selectedTenant]);
+
+    // NEW: Fetch current KSI data for the selected tenant
+    const fetchCurrentKSIData = useCallback(async () => {
+        try {
+            setError(null);
+            
+            console.log(`🔍 Fetching current KSI data for tenant: ${selectedTenant}`);
+            
+            // Call the results API to get current KSI status
+            const response = await ksiService.getValidationResults(selectedTenant);
+            console.log('📊 Current KSI Data Response:', response);
+            
+            if (response.success && response.data && response.data.validation_results) {
+                const results = response.data.validation_results;
+                
+                // Process the results for display
+                const processedResults = results.map(result => {
+                    let resultBody = result.result?.body;
+                    let parsedBody = null;
+                    
+                    // Try to parse the JSON body if it's a string
+                    if (typeof resultBody === 'string') {
+                        try {
+                            parsedBody = JSON.parse(resultBody);
+                        } catch (e) {
+                            console.warn('Could not parse result body:', resultBody);
+                            parsedBody = { raw: resultBody };
+                        }
+                    } else {
+                        parsedBody = resultBody || {};
+                    }
+                    
+                    return {
+                        ksi_id: `${result.validator?.toUpperCase()} Validator`,
+                        description: `${result.validator?.toUpperCase()} Category Validation`,
+                        status: result.status || 'Unknown',
+                        validator: result.validator,
+                        function_name: result.function_name,
+                        details: parsedBody,
+                        ksis_validated: parsedBody.ksis_validated || 0,
+                        summary: parsedBody.summary || null,
+                        individual_results: parsedBody.results || []
+                    };
+                });
+                
+                setValidationResults(processedResults);
+                calculateComplianceOverview(processedResults);
+                
+                console.log(`✅ Loaded ${results.length} current KSI results`);
+            } else {
+                console.log('ℹ️ No current KSI data found for this tenant');
+                setValidationResults([]);
+                setComplianceOverview(null);
+            }
+            
+        } catch (err) {
+            console.error('❌ Error fetching current KSI data:', err);
+            // Don't show error for this - it's just background loading
+            setValidationResults([]);
+            setComplianceOverview(null);
         }
-        
-    } catch (err) {
-        console.error('❌ Error fetching execution history:', err);
-        setError(`Failed to fetch execution history: ${err.message}`);
-        setExecutionHistory([]);
-    } finally {
-        setLoading(false);
-    }
-}, [selectedTenant]);
+    }, [selectedTenant]);
 
     // Load tenants on component mount
     useEffect(() => {
         loadTenants();
     }, [loadTenants]);
 
-    // Load execution history when selected tenant changes
+    // Load execution history AND current KSI data when selected tenant changes
     useEffect(() => {
         if (selectedTenant && availableTenants.length > 0) {
             fetchExecutionHistory();
+            fetchCurrentKSIData(); // AUTO-LOAD KSI DATA
         }
-    }, [selectedTenant, availableTenants.length, fetchExecutionHistory]);
+    }, [selectedTenant, availableTenants.length, fetchExecutionHistory, fetchCurrentKSIData]);
 
     const fetchValidationResults = async (executionId) => {
         try {
@@ -341,9 +402,10 @@ const fetchExecutionHistory = useCallback(async () => {
             
             setLastExecution(response);
             
-            // Refresh execution history after a brief delay
+            // Refresh execution history and KSI data after a brief delay
             setTimeout(() => {
                 fetchExecutionHistory();
+                fetchCurrentKSIData();
             }, 2000);
             
         } catch (err) {
@@ -456,7 +518,10 @@ const fetchExecutionHistory = useCallback(async () => {
                         </button>
                         
                         <button
-                            onClick={fetchExecutionHistory}
+                            onClick={() => {
+                                fetchExecutionHistory();
+                                fetchCurrentKSIData();
+                            }}
                             disabled={loading || tenantsLoading}
                             className="bg-gray-600 hover:bg-gray-700 disabled:bg-gray-400 text-white px-6 py-2 rounded-md font-medium transition-colors"
                         >
@@ -541,7 +606,7 @@ const fetchExecutionHistory = useCallback(async () => {
                 </div>
             )}
 
-            {/* KSI Categories Overview */}
+            {/* KSI Categories Overview - NOW SHOWS CURRENT DATA */}
             <div className="bg-white shadow rounded-lg p-6">
                 <h2 className="text-xl font-semibold text-gray-900 mb-4">
                     📋 KSI Categories
@@ -631,7 +696,7 @@ const fetchExecutionHistory = useCallback(async () => {
                 <div className="bg-white shadow rounded-lg p-6">
                     <div className="flex justify-between items-center mb-4">
                         <h2 className="text-xl font-semibold text-gray-900">
-                            🔍 Validation Results for Execution: {selectedExecutionId?.substring(0, 8)}...
+                            🔍 Validation Results for {selectedExecutionId ? `Execution: ${selectedExecutionId.substring(0, 8)}...` : 'Current KSI Status'}
                         </h2>
                         <button
                             onClick={closeResults}
