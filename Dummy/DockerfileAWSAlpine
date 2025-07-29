@@ -1,0 +1,106 @@
+# ---- Stage 1: Go Builder for go-getter using official Go binary ----
+FROM alpine:3.20 AS go-getter-builder
+
+ENV GOLANG_VERSION=1.24.4 \
+    CGO_ENABLED=0 \
+    GOOS=linux \
+    GOARCH=amd64 \
+    GOBIN=/go/bin
+
+RUN apk add --no-cache curl git tar
+
+RUN curl -fsSL "https://go.dev/dl/go${GOLANG_VERSION}.linux-amd64.tar.gz" -o go.tar.gz && \
+    tar -C /usr/local -xzf go.tar.gz && \
+    rm go.tar.gz
+
+ENV PATH="/usr/local/go/bin:$PATH"
+
+RUN go install github.com/hashicorp/go-getter/cmd/go-getter@v1.7.8
+
+
+# ---- Stage 2: Python Builder with Poetry ----
+FROM python:3.12-alpine AS python-builder
+
+ENV POETRY_VERSION=1.8.2 \
+    PYTHONUNBUFFERED=1 \
+    CRYPTOGRAPHY_DONT_BUILD_RUST=1 \
+    PATH="/venv/bin:/root/.poetry/bin:$PATH"
+
+# Create virtualenv early
+RUN python3 -m venv /venv
+
+# Install build tools
+RUN apk add --no-cache \
+    build-base \
+    gcc \
+    git \
+    bash \
+    curl \
+    make \
+    rust \
+    cargo \
+    libffi-dev \
+    musl-dev \
+    openssl-dev \
+    postgresql-dev \
+    ca-certificates \
+    py3-pip \
+    py3-wheel \
+    py3-setuptools \
+    py3-cffi \
+    libpq \
+    tzdata \
+    python3-dev 
+
+# Install Poetry
+ENV PATH="/root/.local/bin:$PATH"
+RUN curl -sSL https://install.python-poetry.org | python3 - && \
+    poetry config virtualenvs.create false && \
+    poetry config virtualenvs.in-project false
+
+WORKDIR /app
+
+# Copy dependency files early to cache them
+COPY pyproject.toml poetry.lock* ./
+
+# Pre-install critical packages (mitigate CVEs)
+#LET POETRY HANDLE THIS
+#RUN pip install --upgrade pip && \
+#    pip install "cryptography>=45.0.2" "certifi>=2023.7.22" "nltk>=3.9" "gitpython>=3.1.32" "cookiecutter>=2.1.1" "h11>=0.11.0,<0.15.0" && \
+#    pip install --no-use-pep517 "pyclamd==0.4.0" || true
+
+# Install all dependencies
+RUN poetry install --no-root --no-interaction --no-ansi
+
+# Copy full app source
+COPY . .
+
+
+# ---- Stage 3: Final CI/CD Base Image ----
+FROM python:3.12-alpine
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH="/venv/bin:$PATH"
+
+# Runtime dependencies only
+RUN apk add --no-cache \
+    libpq \
+    bash \
+    git \
+    curl \
+    ca-certificates \
+    tzdata \
+    postgresql-client
+
+# Copy virtualenv and app
+COPY --from=python-builder /venv /venv
+COPY --from=python-builder /app /app
+
+# Copy go-getter binary from correct path
+COPY --from=go-getter-builder /go/bin/go-getter /usr/local/bin/go-getter
+
+WORKDIR /app
+
+# Optional default CMD
+# CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

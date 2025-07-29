@@ -1,0 +1,156 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "TerraformRequiredPermissions",
+            "Effect": "Allow",
+            "Action": [
+                "ecr:GetAuthorizationToken",
+                "ecr:BatchCheckLayerAvailability",
+                "ec2:*",
+                "rds:DeleteDBSubnetGroup",
+                "rds:CreateDBInstance",
+                "rds:CreateDBSubnetGroup",
+                "rds:DeleteDBInstance",
+                "rds:DescribeDBSubnetGroups",
+                "rds:DescribeDBInstances",
+                "rds:ListTagsForResource",
+                "rds:ModifyDBInstance",
+                "iam:CreateServiceLinkedRole",
+                "rds:AddTagsToResource",
+                "iam:CreateRole",
+                "iam:GetInstanceProfile",
+                "iam:DeletePolicy",
+                "iam:DetachRolePolicy",
+                "iam:GetRole",
+                "iam:AddRoleToInstanceProfile",
+                "iam:ListInstanceProfilesForRole",
+                "iam:ListRolePolicies",
+                "iam:ListAttachedRolePolicies",
+                "iam:DeleteRole",
+                "iam:TagRole",
+                "iam:PassRole",
+                "iam:GetPolicyVersion",
+                "iam:GetPolicy",
+                "iam:CreatePolicyVersion",
+                "iam:DeletePolicyVersion",
+                "iam:CreateInstanceProfile",
+                "iam:DeleteInstanceProfile",
+                "iam:ListPolicyVersions",
+                "iam:AttachRolePolicy",
+                "iam:CreatePolicy",
+                "iam:RemoveRoleFromInstanceProfile",
+                "iam:ListEntitiesForPolicy",
+                "logs:CreateLogGroup",
+                "logs:DeleteLogGroup",
+                "logs:DescribeLogGroups",
+                "logs:ListTagsLogGroup",
+                "logs:TagLogGroup",
+                "ecs:DeleteCluster",
+                "ecs:CreateService",
+                "ecs:UpdateService",
+                "ecs:DeregisterTaskDefinition",
+                "ecs:DescribeClusters",
+                "ecs:RegisterTaskDefinition",
+                "ecs:DeleteService",
+                "ecs:DescribeTaskDefinition",
+                "ecs:DescribeServices",
+                "ecs:CreateCluster",
+                "ecs:TagResource",
+                "ecs:UntagResource",
+                "elasticloadbalancing:*",
+                "s3:*",
+                "ecr:ListImages",
+                "ecr:DescribeImages",
+                "ecr:BatchGetImage",
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:DescribeRegistry",
+                "ecr:GetAuthorizationToken",
+                "ecr:DescribeRepositories",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:ListTagsForResource",
+                "ecr:BatchDeleteImage",
+                "ecr:CompleteLayerUpload",
+                "ecr:PutImage",
+                "ecr:CreateRepository",
+                "ecr:UploadLayerPart",
+                "ecr:InitiateLayerUpload",
+                "ecr:TagResource",
+                "ecr:UntagResource",
+                "cognito-idp:CreateUserPool",
+                "cognito-idp:TagResource",
+                "cognito-idp:DescribeUserPool",
+                "cognito-idp:GetUserPoolMfaConfig",
+                "cognito-idp:DeleteUserPool",
+                "cognito-idp:CreateUserPoolClient",
+                "cognito-idp:UpdateUserPool",
+                "cognito-idp:DescribeUserPoolClient",
+                "cognito-idp:DeleteUserPoolClient",
+                "cognito-idp:UpdateUserPoolClient",
+                "cognito-idp:AdminConfirmSignUp",
+                "cognito-idp:SetUserPoolMfaConfig",
+                "cognito-idp:AdminInitiateAuth",
+                "dynamodb:CreateTable",
+                "dynamodb:DescribeTable",
+                "dynamodb:GetItem",
+                "dynamodb:UpdateItem",
+                "dynamodb:PutItem",
+                "dynamodb:DescribeTable",
+                "dynamodb:Scan",
+                "dynamodb:Query",
+                "dynamodb:TagResource",
+                "dynamodb:DescribeContinuousBackups",
+                "dynamodb:DescribeTimeToLive",
+                "dynamodb:DeleteTable"
+            ],
+            "Resource": [
+                "*",
+                "*"
+            ]
+        },
+        {
+            "Sid": "AllowListS3StateBucket",
+            "Effect": "Allow",
+            "Action": "s3:ListBucket",
+            "Resource": "arn:aws-us-gov:s3:::fedrisk-api-tf-state-2025-05-01"
+        },
+        {
+            "Sid": "AllowS3StateBucketAccess",
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject"
+            ],
+            "Resource": "arn:aws-us-gov:s3:::fedrisk-api-tf-state-2025-05-01/*"
+        },
+        {
+            "Sid": "AllowStateLockingAccess",
+            "Effect": "Allow",
+            "Action": [
+                "dynamodb:PutItem",
+                "dynamodb:DeleteItem",
+                "dynamodb:GetItem"
+            ],
+            "Resource": [
+                "arn:aws-us-gov:dynamodb:*:*:table/fedrisk-api-tf-state-lock"
+            ]
+        },
+        {
+            "Sid": "AllowCognitoAccess",
+            "Effect": "Allow",
+            "Action": [
+                "cognito-idp:*"
+            ],
+            "Resource": [
+                "arn:aws-us-gov:cognito-idp:us-gov-east-1:736539455039:userpool/us-gov-east-1_fvUyPQz8R"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ses:*"
+            ],
+            "Resource": "*"
+        }
+    ]
+}

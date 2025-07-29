@@ -1,0 +1,42 @@
+# Environment can be any value that you want depending on needs, but 
+# the value 'prod' is expected when running in a true production environment
+ENVIRONMENT=local
+
+# Put one or more comma separated emails here - all emails sent via the fedrisk
+# api will only go to these addresses unless the ENVIRONMENT value is 'prod'
+NON_PROD_EMAIL_RECEIVER_ADDRESSES=pradeep@finoit.com, ankit@finoit.com
+
+# Used by postgres image when creating database
+POSTGRES_USER=fedrisk
+POSTGRES_PASSWORD=fedrisk
+POSTGRES_SERVER=db
+POSTGRES_PORT=5432
+POSTGRES_DB=fedrisk
+PGDATA=/var/lib/postgresql/data/pgdata
+POSTGRES_HOST_AUTH_METHOD=md5
+
+# Used by Fedrisk API at runtime to connect to the database
+RDS_USERNAME=fedrisk
+RDS_PASSWORD=fedrisk
+RDS_HOSTNAME=localhost
+RDS_PORT=5432
+RDS_DB_NAME=fedrisk
+
+# Used by Fedrisk API to connect to the intended Cognito Pool
+COGNITO_USER_POOL_ID=SET_THIS_TO_THE_POOL_ID_FOR_YOUR_COGNITO_POOL
+COGNITO_WEB_CLIENT_ID=SET_THIS_TO_THE_COGNITO_CLIENT_ID_THAT_HAS_ACCESS_TO_THE_POOL
+
+
+AWS_DEFAULT_REGION=us-east-1
+AWS_ACCESS_KEY_ID=XXXXXXX
+AWS_SECRET_ACCESS_KEY=XXXXXX
+FRONTEND_SERVER_URL=SET_THIS_TO_WHATEVER_FRONTEND_URL_YOU_NEED
+FEDRISK_JWT_SECRET_KEY=SET_THIS_AS_DESIRED
+
+# Email Settings
+SMTP_HOST=SET_THIS_TO_YOUR_EMAIL_HOST
+SMTP_PORT=SET_THIS_TO_THE_PORT_YOUR_EMAIL_HOST_IS_LISTENING_ON
+SMTP_USERNAME=SET_THIS_TO_USERNAME_FOR_EMAIL_HOST
+SMTP_PASSWORD=SET_THIS_TO_PASSWORD_FOR_EMAIL_HOST_USER
+SMTP_SENDER_EMAIL="support@fedrisk.com"
+SMTP_SENDER_NAME="Fedrisk"

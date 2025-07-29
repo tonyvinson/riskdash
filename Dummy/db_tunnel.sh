@@ -1,0 +1,2 @@
+# ssh -L 5432:fedriskapi-db.c1d6fkn89rki.us-east-1.rds.amazonaws.com:5432 ec2-user@3.237.83.68
+ssh -i ~/.ssh/frapiccino-jumphost-key.pem -L 5432:frapi-default-db.c1yytb7gvync.us-gov-east-1.rds.amazonaws.com:5432 ec2-user@ec2-18-252-37-232.us-gov-east-1.compute.amazonaws.com

@@ -1,0 +1,141 @@
+# Template docker-push
+
+# The workflow allows running tests, code linting and security scans on feature branches (as well as master).
+
+# 01/31/2025 - added Google URL for captcha to allowed origins
+
+# 03/21/2025 - update allowed origins
+
+# image: atlassian/default-image:3
+image:
+  name: 736539455039.dkr.ecr.us-gov-east-1.amazonaws.com/cicd_image:V1.0.40
+  aws:
+    access-key: $AWS_ACCESS_KEY_ID_GOV_CLOUD
+    secret-key: $AWS_SECRET_ACCESS_KEY_GOV_CLOUD
+    
+definitions:
+  services:
+    docker:
+      memory: 3072
+
+pipelines:
+  custom:
+    develop:
+      - step:
+          name: Build and Test Develop
+          script:
+            - export DOCKER_BUILDKIT=1
+            - make final-docker-image
+            - docker build --build-arg FEDRISK_JWT_SECRET_KEY="${FEDRISK_JWT_SECRET_KEY}" --build-arg FRONTEND_SERVER_URL="${FRONTEND_SERVER_URL_DEV}" --build-arg AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" --build-arg AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" --build-arg COGNITO_ACCESS_KEY_ID="${COGNITO_ACCESS_KEY_ID}" --build-arg COGNITO_SECRET_ACCESS_KEY="${COGNITO_SECRET_ACCESS_KEY}" --build-arg COGNITO_WEB_CLIENT_ID="${COGNITO_WEB_CLIENT_ID}" --build-arg COGNITO_USER_POOL_ID="${COGNITO_USER_POOL_ID_DEV}" --build-arg STRIPE_SECRET_KEY="$STRIPE_SECRET_KEY" --build-arg STRIPE_TEST_CUSTOMER_ID="$STRIPE_TEST_CUSTOMER_ID" --build-arg AWS_KMS_KEY_ID="$AWS_KMS_KEY_ID" --target test -t test .
+            - export IMAGE_ID=`docker images -q test`
+            - docker run -e RECAPTCHA_SECRET_KEY="$RECAPTCHA_SECRET_KEY" -e FEDRISK_JWT_SECRET_KEY="${FEDRISK_JWT_SECRET_KEY}" -e FRONTEND_SERVER_URL="${FRONTEND_SERVER_URL_DEV}" -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" -e COGNITO_ACCESS_KEY_ID="${COGNITO_ACCESS_KEY_ID}" -e COGNITO_SECRET_ACCESS_KEY="${COGNITO_SECRET_ACCESS_KEY}" -e COGNITO_WEB_CLIENT_ID="${COGNITO_WEB_CLIENT_ID}" -e COGNITO_USER_POOL_ID="${COGNITO_USER_POOL_ID_DEV}" -e STRIPE_SECRET_KEY="$STRIPE_SECRET_KEY" -e STRIPE_TEST_CUSTOMER_ID="$STRIPE_TEST_CUSTOMER_ID" -r AWS_KMS_KEY_ID="$AWS_KMS_KEY_ID" --user root -d --name container test
+            - export PYTHONPATH=$PYTHONPATH:fedrisk_api
+            - docker exec container coverage run -m pytest --cov=fedrisk_api /project/tests
+            - docker stop container
+          services:
+            - docker
+          caches:
+            - docker
+            - pip
+    staginggovcloud:
+      - step:
+          name: Build and Push Staging Gov Cloud
+          script:
+            - export DOCKER_BUILDKIT=1
+            - IMAGE_NAME=$BITBUCKET_REPO_SLUG
+            - pip install awscli
+            - export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID_GOV_CLOUD
+            - export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY_GOV_CLOUD
+            - export AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION_GOV_CLOUD
+            - export AWS_REGISTRY_URI=$AWS_REGISTRY_URI_GOV_CLOUD
+            - aws ecr get-login-password --region $AWS_DEFAULT_REGION_GOV_CLOUD | docker login --username AWS --password-stdin ${AWS_REGISTRY_URI_GOV_CLOUD}
+            #- apt-get update && apt-get git a -y --no-install-recommends make
+            - apk add make
+            - make final-docker-image
+            - docker build --target final -t ${AWS_REGISTRY_URI_GOV_CLOUD}:V1.28.3 .
+            - export IMAGE_ID=`docker images -q $AWS_REGISTRY_URI_GOV_CLOUD:V1.28.3`
+            - docker tag ${AWS_REGISTRY_URI_GOV_CLOUD}:V1.28.3 ${AWS_REGISTRY_URI_GOV_CLOUD}:V1.28.3
+            - docker push ${AWS_REGISTRY_URI_GOV_CLOUD}:V1.28.3
+          services:
+            - docker
+          caches:
+            - docker
+            - pip
+          artifacts:
+            - "*.tar"
+      - step:
+          trigger: manual
+          deployment: Staging GovCloud
+          name: Deploy to ECS Staging GovCloud
+          services:
+              - docker
+          image: hashicorp/terraform:latest
+          script:
+            - echo $STAGING_FRONTEND_SERVER_URL_GOV_CLOUD
+            - echo $STAGING_COGNITO_USER_POOL_ID_GOV_CLOUD
+            - echo $ENVIRONMENT_GOV_CLOUD
+            - echo $ALLOWED_ORIGINS_GOV_CLOUD
+            - echo $AWS_ACCESS_KEY_ID_GOV_CLOUD
+            - echo $AWS_SECRET_ACCESS_KEY_GOV_CLOUD
+            - echo $AWS_KMS_KEY_ID_GOV_CLOUD
+            # Replace the docker image name in the task definition with the newly pushed image.
+            - export IMAGE_NAME="${AWS_REGISTRY_URI_GOV_CLOUD}:V1.28.3"
+            - export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID_GOV_CLOUD
+            - export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY_GOV_CLOUD
+            - export AWS_KMS_KEY_ID=$AWS_KMS_KEY_ID_GOV_CLOUD
+            - export AWS_EC2_METADATA_DISABLED=true
+            - cd deploy
+            - terraform init
+            - terraform workspace select staging
+            - terraform validate
+            #- terraform fmt -check
+            - terraform apply -lock=false --auto-approve -var environment="$ENVIRONMENT_GOV_CLOUD" -var aws_access_key_id="$AWS_ACCESS_KEY_ID_GOV_CLOUD" -var aws_secret_access_key="$AWS_SECRET_ACCESS_KEY_GOV_CLOUD" -var db_username="$DB_USERNAME" -var db_password="$DB_PASSWORD" -var smtp_sender_email="$SMTP_EMAIL_GOV_CLOUD" -var smtp_sender_name="$SMTP_NAME_GOV_CLOUD" -var smtp_username="$SMTP_USERNAME_GOV_CLOUD" -var smtp_password="$SMTP_PASSWORD_GOV_CLOUD" -var smtp_port="587" -var smtp_host="email-smtp.us-gov-east-1.amazonaws.com" -var stripe_secret_key="$STRIPE_SECRET_KEY" -var stripe_public_key="$STRIPE_PUBLIC_KEY" -var frontend_server_url="$STAGING_FRONTEND_SERVER_URL_GOV_CLOUD" -var allowed_origins="$ALLOWED_ORIGINS_GOV_CLOUD" -var environment="$ENVIRONMENT_GOV_CLOUD" -var aws_ses_verified_mail="$AWS_SES_VERIFIED_MAIL_GOV_CLOUD" -var aws_ses_region="$AWS_SES_REGION_GOV_CLOUD" -var aws_user="$AWS_USER_GOV_CLOUD" -var cognito_user_pool_id="$STAGING_COGNITO_USER_POOL_ID_GOV_CLOUD" -var cognito_web_client_id="$STAGING_COGNITO_WEB_CLIENT_ID_GOV_CLOUD"  -var recaptcha_secret_key="$RECAPTCHA_SECRET_KEY" -var sms_external_id="$SMS_EXTERNAL_ID" -var sns_caller_arn="$SNS_CALLER_ARN"
+    productiongovcloud:
+      - step:
+          name: Build and Push Production GovCloud
+          script:
+            - export DOCKER_BUILDKIT=1
+            - IMAGE_NAME=$BITBUCKET_REPO_SLUG
+            - pip install awscli
+            - export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID_GOV_CLOUD
+            - export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY_GOV_CLOUD
+            - export AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION_GOV_CLOUD
+            - export AWS_REGISTRY_URI=$AWS_REGISTRY_URI_GOV_CLOUD
+            - aws ecr get-login-password --region $AWS_DEFAULT_REGION_GOV_CLOUD | docker login --username AWS --password-stdin ${AWS_REGISTRY_URI_GOV_CLOUD}
+            #- apt-get update && apt-get install -y --no-install-recommends make
+            - apk add make
+            - make final-docker-image
+            - docker build --target final -t ${AWS_REGISTRY_URI_GOV_CLOUD}:V1.28.3 .
+            - export IMAGE_ID=`docker images -q $AWS_REGISTRY_URI_GOV_CLOUD:V1.28.3`
+            - docker tag ${AWS_REGISTRY_URI_GOV_CLOUD}:V1.28.3 ${AWS_REGISTRY_URI_GOV_CLOUD}:V1.28.3
+            - docker push ${AWS_REGISTRY_URI_GOV_CLOUD}:V1.28.3
+          services:
+            - docker
+          caches:
+            - docker
+            - pip
+          artifacts:
+            - "*.tar"
+      - step:
+          trigger: manual
+          deployment: Production GovCloud
+          name: Deploy to ECS
+          services:
+              - docker
+          image: hashicorp/terraform:latest
+          script:
+            - echo $PROD_FRONTEND_SERVER_URL_GOV_CLOUD
+            - echo $PROD_COGNITO_USER_POOL_ID_GOV_CLOUD
+            - echo $ENVIRONMENT_GOV_CLOUD
+            - echo $ALLOWED_ORIGINS_GOV_CLOUD
+            # Replace the docker image name in the task definition with the newly pushed image.
+            - export IMAGE_NAME="${AWS_REGISTRY_URI}:V1.28.3"
+            - export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID_GOV_CLOUD
+            - export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY_GOV_CLOUD
+            - export AWS_KMS_KEY_ID=$AWS_KMS_KEY_ID_GOV_CLOUD
+            - export AWS_EC2_METADATA_DISABLED=true
+            - cd deploy
+            - terraform init
+            - terraform validate
+            #- terraform fmt -check
+            - terraform apply -lock=false --auto-approve -var environment="$ENVIRONMENT_GOV_CLOUD" -var aws_access_key_id="$AWS_ACCESS_KEY_ID_GOV_CLOUD" -var aws_secret_access_key="$AWS_SECRET_ACCESS_KEY_GOV_CLOUD" -var db_username="$DB_USERNAME" -var db_password="$DB_PASSWORD" -var smtp_sender_email="$SMTP_EMAIL_GOV_CLOUD" -var smtp_sender_name="$SMTP_NAME_GOV_CLOUD" -var smtp_username="$SMTP_USERNAME_GOV_CLOUD" -var smtp_password="$SMTP_PASSWORD_GOV_CLOUD" -var smtp_port="587" -var smtp_host="email-smtp.us-gov-east-1.amazonaws.com" -var stripe_secret_key="$STRIPE_SECRET_KEY" -var stripe_public_key="$STRIPE_PUBLIC_KEY" -var frontend_server_url="$PROD_FRONTEND_SERVER_URL_GOV_CLOUD" -var allowed_origins="$ALLOWED_ORIGINS_GOV_CLOUD" -var environment="$ENVIRONMENT_GOV_CLOUD" -var aws_ses_verified_mail="$AWS_SES_VERIFIED_MAIL_GOV_CLOUD" -var aws_ses_region="$AWS_SES_REGION_GOV_CLOUD" -var aws_user="$AWS_USER_GOV_CLOUD" -var cognito_user_pool_id="$PROD_COGNITO_USER_POOL_ID_GOV_CLOUD" -var cognito_web_client_id="$PROD_COGNITO_WEB_CLIENT_ID_GOV_CLOUD"  -var recaptcha_secret_key="$RECAPTCHA_SECRET_KEY" -var sms_external_id="$SMS_EXTERNAL_ID" -var sns_caller_arn="$SNS_CALLER_ARN"

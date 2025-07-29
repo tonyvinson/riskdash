@@ -1,0 +1,6 @@
+Your subscription with Fedrisk is updated.
+
+Your subscription id  : {subscription}
+
+Best Regards
+Fedrisk Team

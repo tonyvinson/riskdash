@@ -1,0 +1,190 @@
+[build-system]
+requires = ["poetry_core>=1.1.13"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "fedrisk_api"
+version = "1.28.3"
+description = "API for the Fedrisk Application"
+authors = ["rwolf <richardwolf@gmail.com>"]
+repository = "https://github.com/rwolf/python_libraries/fedrisk_api"
+include = [
+    "fedrisk_api",
+    "README.md",
+    "pyproject.toml"
+]
+
+[tool.poetry.dependencies]
+jinja2 = ">=3.1.5,<4.0.0"
+python = ">=3.12,<4.0"
+psycopg2-binary = "^2.9.9"
+cryptography = ">=45.0.2"
+h11 = "^0.16.0"
+nltk = ">=3.9.1"
+gitpython = ">=3.1.44"
+cookiecutter = ">=2.6.0"
+click = "<8.1.0"
+uvicorn = "0.23.2"
+SQLAlchemy = "^1.4.26"
+passlib = "^1.7.4"
+bcrypt = "^3.2.0"
+python-dotenv = "^0.19.1"
+pydantic = {extras = ["email"], version = "^1.8.2"}
+python-multipart = "^0.0.18"
+aiobotocore = "2.1.0"
+botocore = "1.23.24"
+boto3 = "1.20.24"
+alembic = "^1.7.5"
+typer = "0.12.3"
+rich = "12.5.1"
+python-jose = ">=3.3.2"
+SQLAlchemy-Utils = "^0.38.0"
+pycognito = "^2022.8.0"
+fastapi = "^0.116.0"
+starlette = ">=0.40.0,<1.0.0"
+traitlets = "^5.8.0"
+stripe = "^5.0.0"
+openpyxl = "^3.1.2"
+pandas = "^2.0.1"
+pytest = "^7.3.1"
+pytest-cov = "^4.0.0"
+pytest-mock = "^3.11.0"
+pytest-asyncio = "^0.21.0"
+pytest-xdist = "^3.2.1"
+xlrd = "^2.0.1"
+pillow = "^10.3.0"
+numpy = "2.1.0"
+clamd = "^1.0.2"
+pyclamd = "^0.4.0"
+legacy-cgi = "2.6.3"
+
+[tool.poetry.group.dev.dependencies]
+bandit = "<1.7.3"
+black = "^25.1.0"
+bumpversion = "^0.6.0"
+cookiecutter = ">=1.7.3"
+duty = "^1.6.0"
+future = "^0.18.2"
+git-changelog = "^2.5.0"
+httpx = "^0.27.1"
+ipython = "^8.10"
+markupsafe = "2.0.1"
+mock = "^4.0.2"
+mypy = "^0.931"
+openpyxl = "^3.1.2"
+pandas = "^2.0.1"
+pre-commit = "^2.7.1"
+pygments = "^2.15.1"
+pyupgrade = "^2.10.0"
+recommonmark = "^0.7.1"
+ruff = "^0.0.246"
+safety = "^1.10.3"
+sphinx = "^4.2.0"
+sphinx-click = "^4.3.0"
+sphinx-rtd-theme = "*"
+toml = "^0.10.2"
+types-requests = "^2.28.1"
+
+[tool.black]
+# https://github.com/psf/black
+line-length = 100
+target-version = ["py313"]
+exclude="tests/fixtures"
+
+
+[tool.isort]
+profile = "black"
+
+
+[tool.poetry.scripts]
+fedrisk_api = "fedrisk_api.cli.cli:cli"
+
+
+[tool.ruff]
+# Enable Pyflakes `E` and `F` codes by default.
+select = ["E", "F"]
+ignore = []
+
+# Allow autofix for all enabled rules (when `--fix`) is provided.
+# fixable = ["A", "B", "C", "D", "E", "F", "..."]
+unfixable = []
+
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    ".venv",
+    ".spg",
+    "tests",
+]
+
+# Same as Black.
+line-length = 180
+
+# Allow unused variables when underscore-prefixed.
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+# Assume Python 3.13.
+target-version = "py313"
+
+[tool.ruff.mccabe]
+# Unlike Flake8, default to a complexity level of 10.
+max-complexity = 10
+
+[tool.ruff.per-file-ignores]
+"j1_csi_pipeline/util/servicenow_util.py" = ["E501"]
+"j1_csi_pipeline/util/cisco_ad.py" = ["E501"]
+"j1_csi_pipeline/processor/csi_processor.py" = ["E501"]
+"j1_csi_pipeline/processor/ticket_creation_processor.py" = ["E501"]
+"j1_csi_pipeline/processor/base_csi_processor.py" = ["E501"]
+"j1_csi_pipeline/util/jupiterone_util.py" = ["E501"]
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+# Regexes for lines to exclude from consideration
+exclude_also = [
+    # Don't complain about missing debug-only code:
+    "def __repr__",
+    "if self\\.debug",
+
+    # Don't complain if tests don't hit defensive assertion code:
+    "raise AssertionError",
+    "raise NotImplementedError",
+
+    # Don't complain if non-runnable code isn't run:
+    "if 0:",
+    "if __name__ == .__main__.:",
+
+    # Don't complain about abstract methods, they aren't run:
+    "@(abc\\.)?abstractmethod",
+    ]
+
+ignore_errors = true
+
+[tool.coverage.html]
+directory = "coverage_html_report"
+
+[tool.coverage.paths]
+source = [
+    "tests/",
+    "savtest/",
+    ]

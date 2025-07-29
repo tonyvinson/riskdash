@@ -1,0 +1,10 @@
+Thank you for subscribing! You will now receive updates and exclusive content from us. We appreciate your support and look forward to connecting with you.
+
+Frequency : {frequency}
+Start date : {start_date}
+End date : {end_date}
+Free Users : {free_users}
+Additional Users : {additional_users}
+
+Best Regards
+Fedrisk Team

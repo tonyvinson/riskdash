@@ -1,0 +1,7 @@
+We have received notification that you have cancelled your subscription with subscription id
+: {subscription} to our services. We're sorry to see you go and would like to thank you for your past support. If there is anything that we could have done differently, please let us know.
+
+We hope to have the opportunity to serve you again in the future.
+
+Best Regards
+Fedrisk Team

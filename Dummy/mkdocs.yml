@@ -1,0 +1,55 @@
+site_name: "fedrisk_api"
+site_description: "API for the Fedrisk Application"
+site_author: "Richard Wolf <richardwolf@gmail.com>"
+
+nav:
+  - Overview and Usage: index.md
+  - Advanced:
+      - CLI Referencerence: cli-reference.md
+      - Library Reference: fedrisk_api-reference.md
+      - Mkdocs Instructions: mkdocs-instructions.md
+  - Changelog: changelog.md
+  - Credits: credits.md
+
+theme:
+  name: material
+
+markdown_extensions:
+  - markdown.extensions.admonition
+  - markdown_include.include:
+  - markdown.extensions.toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.emoji
+  - pymdownx.keys
+  - pymdownx.tilde
+  - pymdownx.mark
+  - pymdownx.magiclink
+  - pymdownx.progressbar
+  - pymdownx.smartsymbols
+  - pymdownx.superfences
+  - pymdownx.tabbed
+  - pymdownx.tasklist
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - mkdocs-click
+
+plugins:
+  - search
+  - mkdocstrings:
+      watch:
+        - fedrisk_api/
+
+copyright: ""
+
+# directory to output HTML build
+site_dir: build/docs_html
+
+# Determines if a broken link to a page within the documentation is considered
+# a warning or an error (link to a page not listed in the pages setting). Set to
+# true to halt processing when a broken link is found, false prints a warning.
+strict: true
+
+# Determines the address used when running mkdocs serve.
+# Set it to 8001, so that it doesn't conflict with django's 8000 port
+dev_addr: "127.0.0.1:8000"

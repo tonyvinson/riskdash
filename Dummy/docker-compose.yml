@@ -1,0 +1,84 @@
+# Use postgres/example user/password credentials
+version: "3.1"
+
+services:
+  web:
+#    image: fedrisk-fastapi:dev-latest
+    image: fedrisk-fastapi:final
+#    image: fedrisk-fastapi:test
+    command: "/venv/bin/python -m uvicorn main:app --host 0.0.0.0"
+#    command: "/venv/bin/python -m uvicorn main:app --host 0.0.0.0 --reload"
+#    command: "/venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000"
+#        ".venv/bin/python -m pip install -e . && /wait && .venv/bin/uvicorn main:app --host 0.0.0.0 --port 8432 --ssl-keyfile ./key.pem --ssl-certfile ./cert.pem --reload"
+#        "/venv/bin/python -m pip install -e . && /wait && /venv/bin/alembic upgrade head && /venv/bin/python manage.py load-data && /venv/bin/python manage.py runserver --host 0.0.0.0 --port 8000 --reload"
+#        "/venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000"
+    env_file:
+      - .env
+    environment:
+      - PATH="/venv/bin:/root/.local/bin:$PATH"
+      - WAIT_HOSTS=db:5432
+      - WAIT_HOSTS_TIMEOUT=300
+      - WAIT_SLEEP_INTERVAL=10
+      - WAIT_HOST_CONNECT_TIMEOUT=30
+      - AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+      - AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION
+      - ALLOWED_ORIGINS=$ALLOWED_ORIGINS
+      - COGNITO_ACCESS_KEY_ID=$COGNITO_ACCESS_KEY_ID
+      - COGNITO_SECRET_ACCESS_KEY=$COGNITO_SECRET_ACCESS_KEY
+      - COGNITO_USER_POOL_ID=$COGNITO_USER_POOL_ID
+      - COGNITO_WEB_CLIENT_ID=$COGNITO_WEB_CLIENT_ID
+      - SMTP_USERNAME=$SMTP_USERNAME
+      - SMTP_PASSWORD=$SMTP_PASSWORD
+      - SMTP_HOST=$SMTP_HOST
+      - SMTP_PORT=$SMTP_PORT
+      - SMTP_SENDER_EMAIL=$SMTP_SENDER_EMAIL
+      - SMTP_SENDER_NAME=$SMTP_SENDER_NAME
+      - FE_SERVER_URL=$FE_SERVER_URL
+      - CUSTOM_JWT_TOKEN_SECRET_KEY=$CUSTOM_JWT_TOKEN_SECRET_KEY
+      - RDS_HOSTNAME=db
+      - STRIPE_SECRET_KEY=$STRIPE_SECRET_KEY
+      - STRIPE_PUBLIC_KEY=$STRIPE_PUBLIC_KEY
+      - CC_RETRY_COUNT=$CC_RETRY_COUNT
+      - AWS_KMS_KEY_ID=$AWS_KMS_KEY_ID
+      - ENVIRONMENT=$ENVIRONMENT
+    ports:
+      - 8000:8000
+      - 8432:8432
+    volumes:
+      - "./fedrisk_api:/project/fedrisk_api"
+      - "./config:/project/config"
+      - "./logs:/project/logs"
+      - "./build/coverage_html:/build/coverage_html/index.html"
+    depends_on:
+      - db
+
+  db:
+    image: postgres
+    restart: always
+    ports:
+      - 5432:5432
+    env_file: .env
+    volumes:
+      - "./data:/var/lib/postgresql/data/pgdata"
+
+  #adminer:
+    #image: adminer
+    #restart: always
+    #ports:
+      #- 8080:8080
+    #depends_on:
+      #- db
+  # react_app:
+  #   image: node17
+  #   volumes:
+  #     - "./frontend:/app"
+  #   entrypoint: ["/bin/sh", "-c"]
+  #   command:
+  #     [
+  #       "npm start",
+  #     ]
+  #   ports:
+  #     - 3000:3000
+  #   depends_on:
+  #     - web
