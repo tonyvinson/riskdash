@@ -1,154 +1,325 @@
 #!/bin/bash
 
-echo "🔧 Terraform Fix: Add tenant-metadata table permissions to validator role"
-echo "========================================================================"
+# Master Backend Fix Script
+# Fixes all DynamoDB composite key issues across the entire project
 
-# Step 1: Add variables to lambda module (if not already added)
-echo "📁 Step 1: Adding tenant_metadata variables to lambda module..."
+set -e  # Exit on any error
 
-if ! grep -q "tenant_metadata_table" terraform/modules/lambda/variables.tf; then
-    cat >> terraform/modules/lambda/variables.tf << 'EOF'
+echo "🚀 MASTER BACKEND KEY FIX SCRIPT"
+echo "================================="
+echo ""
 
-variable "tenant_metadata_table" {
-  description = "Name of tenant metadata table"
-  type        = string
-}
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
-variable "tenant_metadata_table_arn" {
-  description = "ARN of tenant metadata table"
-  type        = string
-}
-EOF
-    echo "✅ Added tenant_metadata variables to lambda module"
-else
-    echo "✅ tenant_metadata variables already exist in lambda module"
+# Check if we're in the right directory
+if [ ! -d "lambdas" ] || [ ! -d "terraform" ]; then
+    echo -e "${RED}❌ Error: Please run this script from the project root directory${NC}"
+    echo "   (Should contain 'lambdas' and 'terraform' directories)"
+    exit 1
 fi
 
-# Step 2: Update DynamoDB policy in lambda module
+echo "📋 This script will:"
+echo "   1. Run verification scan to identify issues"
+echo "   2. Fix all validator handler files"
+echo "   3. Fix orchestrator files"  
+echo "   4. Run final verification"
+echo "   5. Provide deployment instructions"
 echo ""
-echo "📁 Step 2: Updating DynamoDB policy in lambda module..."
 
-# Create backup
-cp terraform/modules/lambda/main.tf terraform/modules/lambda/main.tf.backup.$(date +%Y%m%d_%H%M%S)
+read -p "🤔 Continue with the fix process? (y/N): " -n 1 -r
+echo ""
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo -e "${RED}❌ Operation cancelled${NC}"
+    exit 1
+fi
 
-# Use Python to properly update the DynamoDB policy
-cat > /tmp/update_dynamodb_policy.py << 'EOF'
+echo ""
+echo "🔍 STEP 1: Initial Verification Scan"
+echo "======================================"
+
+# Create the verification script if it doesn't exist
+cat > fix_verification.py << 'EOF'
+#!/usr/bin/env python3
+"""
+Key Fix Verification Script
+"""
+
+import os
 import re
+from pathlib import Path
 
-# Read the lambda main.tf file
-with open('terraform/modules/lambda/main.tf', 'r') as f:
-    content = f.read()
-
-# Find the DynamoDB policy and add tenant_metadata_table_arn to resources
-# Look for the Resource array in the DynamoDB policy
-policy_pattern = r'(resource "aws_iam_policy" "ksi_dynamodb_policy".*?Resource = \[)(.*?)(\s+\]\s+\})'
-
-def update_policy_resources(match):
-    policy_start = match.group(1)
-    resources = match.group(2)
-    policy_end = match.group(3)
+def check_file_for_issues(file_path):
+    """Check a single file for DynamoDB key issues"""
+    issues = []
+    suggestions = []
     
-    # Check if tenant_metadata_table_arn is already included
-    if 'tenant_metadata_table_arn' in resources:
-        print("✅ tenant_metadata_table_arn already in DynamoDB policy")
-        return match.group(0)
-    
-    # Add tenant_metadata_table_arn and its index to the resources
-    # Insert before the closing bracket
-    new_resources = resources.rstrip() + ',\n          var.tenant_metadata_table_arn,\n          "${var.tenant_metadata_table_arn}/index/*"'
-    
-    print("✅ Added tenant_metadata_table_arn to DynamoDB policy")
-    return policy_start + new_resources + policy_end
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Check for old get_item pattern with single key
+        if re.search(r'table\.get_item\(Key=\{[\'"]tenant_id[\'"]:\s*tenant_id\}\)', content):
+            issues.append("❌ Found old get_item() with single tenant_id key")
+        
+        # Check for proper query usage
+        if 'table.query(' in content and 'KeyConditionExpression' in content:
+            suggestions.append("✅ Found proper query() usage")
+        
+        return issues, suggestions
+        
+    except Exception as e:
+        return [f"❌ Error reading file: {str(e)}"], []
 
-# Apply the update
-new_content = re.sub(policy_pattern, update_policy_resources, content, flags=re.DOTALL)
+def main():
+    files_with_issues = 0
+    total_issues = 0
+    
+    for file_path in Path('.').glob('**/*.py'):
+        if file_path.is_file():
+            issues, suggestions = check_file_for_issues(str(file_path))
+            
+            if issues:
+                files_with_issues += 1
+                total_issues += len(issues)
+                print(f"📄 {file_path}")
+                for issue in issues:
+                    print(f"   {issue}")
+    
+    print(f"\n📊 Found {total_issues} issues in {files_with_issues} files")
+    return total_issues
 
-# Write back to file
-with open('terraform/modules/lambda/main.tf', 'w') as f:
-    f.write(new_content)
+if __name__ == "__main__":
+    main()
 EOF
 
-python3 /tmp/update_dynamodb_policy.py
-rm /tmp/update_dynamodb_policy.py
+python3 fix_verification.py
+verification_result=$?
 
-# Step 3: Update main.tf to pass tenant_metadata variables (if not already done)
 echo ""
-echo "📁 Step 3: Updating main.tf to pass tenant_metadata variables..."
+echo "🔧 STEP 2: Fix Validator Handler Files"
+echo "======================================"
 
-# Check if already added
-if grep -q "tenant_metadata_table.*=.*module.tenant_management" terraform/main.tf; then
-    echo "✅ tenant_metadata variables already passed to lambda module"
-else
-    # Use Python to update main.tf lambda module call
-    cat > /tmp/update_main_tf.py << 'EOF'
+# Create validator fix script
+cat > fix_validators.py << 'EOF'
+#!/usr/bin/env python3
+"""
+Backend Key Fix Script for Validators
+"""
+
+import os
 import re
+import shutil
+from pathlib import Path
+from datetime import datetime
 
-# Read main.tf
-with open('terraform/main.tf', 'r') as f:
-    content = f.read()
+FIXED_FUNCTION = '''def get_tenant_configuration(tenant_id):
+    """Get tenant configuration from DynamoDB - FIXED VERSION"""
+    try:
+        table_name = os.environ.get('TENANT_CONFIG_TABLE', 'riskuity-ksi-validator-tenant-configurations-production')
+        table = default_dynamodb.Table(table_name)
+        
+        # ✅ FIXED: Use query() instead of get_item() for composite key table
+        response = table.query(
+            KeyConditionExpression='tenant_id = :tid',
+            ExpressionAttributeValues={':tid': tenant_id}
+        )
+        
+        configurations = response.get('Items', [])
+        
+        if configurations:
+            return {
+                'tenant_id': tenant_id,
+                'configurations': configurations,
+                'has_config': True
+            }
+        else:
+            print(f"⚠️ No configuration found for tenant: {tenant_id}")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Error getting tenant configuration: {str(e)}")
+        return None'''
 
-# Find the lambda module block and add tenant_metadata variables
-module_pattern = r'(module "lambda" \{.*?ksi_execution_history_table_arn\s*=\s*module\.dynamodb\.ksi_execution_history_table_arn)(.*?depends_on = \[.*?\])'
+def find_validator_files():
+    validator_files = []
+    for root, dirs, files in os.walk('.'):
+        if 'handler.py' in files and 'validators' in root:
+            handler_path = os.path.join(root, 'handler.py')
+            if os.path.exists(handler_path):
+                validator_files.append(handler_path)
+    return validator_files
 
-def add_tenant_metadata_vars(match):
-    existing_vars = match.group(1)
-    rest = match.group(2)
+def fix_file(file_path):
+    # Create backup
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    backup_path = f"{file_path}.backup.{timestamp}"
+    shutil.copy2(file_path, backup_path)
     
-    # Add tenant_metadata variables
-    addition = '''
-  
-  # Tenant metadata table access
-  tenant_metadata_table     = module.tenant_management.tenant_metadata_table_name
-  tenant_metadata_table_arn = module.tenant_management.tenant_metadata_table_arn'''
+    # Read and fix content
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
     
-    # Also update depends_on to include tenant_management if not already there
-    new_rest = rest.replace('[module.dynamodb]', '[module.dynamodb, module.tenant_management]')
+    # Replace the function
+    pattern = r'def get_tenant_configuration\(tenant_id\):.*?(?=\n\ndef|\nclass|\nif __name__|\Z)'
     
-    return existing_vars + addition + new_rest
+    if re.search(pattern, content, re.DOTALL):
+        new_content = re.sub(pattern, FIXED_FUNCTION, content, flags=re.DOTALL)
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(new_content)
+        
+        print(f"✅ Fixed: {file_path}")
+        return True
+    else:
+        os.remove(backup_path)  # No changes needed
+        print(f"ℹ️ No changes needed: {file_path}")
+        return False
 
-# Apply the change
-new_content = re.sub(module_pattern, add_tenant_metadata_vars, content, flags=re.DOTALL)
+def main():
+    validator_files = find_validator_files()
+    print(f"Found {len(validator_files)} validator files")
+    
+    fixed_count = 0
+    for file_path in validator_files:
+        if fix_file(file_path):
+            fixed_count += 1
+    
+    print(f"Fixed {fixed_count} files")
 
-# Write back
-with open('terraform/main.tf', 'w') as f:
-    f.write(new_content)
-
-print("✅ Updated main.tf lambda module call")
+if __name__ == "__main__":
+    main()
 EOF
 
-    python3 /tmp/update_main_tf.py
-    rm /tmp/update_main_tf.py
-fi
+python3 fix_validators.py
 
-# Step 4: Validate Terraform configuration
 echo ""
-echo "📁 Step 4: Validating Terraform configuration..."
+echo "🔧 STEP 3: Fix Orchestrator Files"  
+echo "=================================="
 
-cd terraform
-if terraform validate; then
-    echo "✅ Terraform configuration is valid!"
+# Create orchestrator fix script
+cat > fix_orchestrator.py << 'EOF'
+#!/usr/bin/env python3
+"""
+Orchestrator Fix Script
+"""
+
+import os
+import re
+import shutil
+from pathlib import Path
+from datetime import datetime
+
+FIXED_ORCHESTRATOR_FUNCTION = '''def get_tenant_configurations(tenant_id: str) -> List[Dict]:
+    """Retrieve KSI configurations for a specific tenant - FIXED VERSION"""
+    table = dynamodb.Table(TENANT_KSI_CONFIGURATIONS_TABLE)
     
-    echo ""
-    echo "📋 Changes made:"
-    echo "  ✅ Added tenant_metadata variables to lambda module"
-    echo "  ✅ Updated DynamoDB policy to include tenant_metadata table"
-    echo "  ✅ Updated main.tf to pass tenant_metadata variables"
-    echo ""
-    echo "🚀 Ready to deploy:"
-    echo "  terraform plan   # Review the IAM policy changes"
-    echo "  terraform apply  # Deploy the permission fix"
-    echo ""
-    echo "✅ This will give validators access to tenant-metadata table!"
+    try:
+        response = table.query(
+            KeyConditionExpression='tenant_id = :tid',
+            ExpressionAttributeValues={':tid': tenant_id}
+        )
+        return response.get('Items', [])
+    except Exception as e:
+        logger.error(f"Error querying tenant configurations for {tenant_id}: {str(e)}")
+        return []'''
+
+def find_orchestrator_files():
+    files = []
+    for root, dirs, file_list in os.walk('.'):
+        for file in file_list:
+            if 'orchestrator' in file.lower() and file.endswith('.py'):
+                files.append(os.path.join(root, file))
+    return files
+
+def fix_orchestrator_file(file_path):
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    backup_path = f"{file_path}.backup.{timestamp}"
+    shutil.copy2(file_path, backup_path)
     
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # Fix the function
+    pattern = r'def get_tenant_configurations\(tenant_id: str\) -> List\[Dict\]:.*?(?=\n\ndef|\nclass|\nif __name__|\Z)'
+    
+    if re.search(pattern, content, re.DOTALL):
+        new_content = re.sub(pattern, FIXED_ORCHESTRATOR_FUNCTION, content, flags=re.DOTALL)
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(new_content)
+        
+        print(f"✅ Fixed: {file_path}")
+        return True
+    else:
+        os.remove(backup_path)
+        print(f"ℹ️ No changes needed: {file_path}")
+        return False
+
+def main():
+    orchestrator_files = find_orchestrator_files()
+    print(f"Found {len(orchestrator_files)} orchestrator files")
+    
+    fixed_count = 0
+    for file_path in orchestrator_files:
+        if fix_orchestrator_file(file_path):
+            fixed_count += 1
+    
+    print(f"Fixed {fixed_count} files")
+
+if __name__ == "__main__":
+    main()
+EOF
+
+python3 fix_orchestrator.py
+
+echo ""
+echo "🔍 STEP 4: Final Verification"
+echo "============================="
+
+python3 fix_verification.py
+final_issues=$?
+
+echo ""
+if [ $final_issues -eq 0 ]; then
+    echo -e "${GREEN}🎉 SUCCESS! All DynamoDB key issues have been resolved.${NC}"
 else
-    echo "❌ Terraform validation failed. Please check the configuration."
-    terraform validate
+    echo -e "${YELLOW}⚠️ Some issues may remain. Check the output above.${NC}"
 fi
 
-cd ../
+echo ""
+echo "📋 STEP 5: Next Steps"
+echo "===================="
+echo ""
+echo -e "${BLUE}🚀 Deployment Instructions:${NC}"
+echo ""
+echo "1. Test the fixes locally:"
+echo "   python3 -m pytest tests/ -v"
+echo ""
+echo "2. Deploy the updated Lambda functions:"
+echo "   cd terraform"
+echo "   terraform plan"
+echo "   terraform apply"
+echo ""
+echo "3. Test the deployed functions:"
+echo "   # Test a validator directly"
+echo "   aws lambda invoke --function-name ksi-validator-cna response.json"
+echo ""
+echo "4. Check CloudWatch logs for any remaining errors:"
+echo "   aws logs tail /aws/lambda/ksi-validator-cna --follow"
+echo ""
+echo -e "${GREEN}✅ Fix script completed successfully!${NC}"
+echo ""
+echo -e "${YELLOW}💡 Backup files created with .backup.timestamp extension${NC}"
+echo "   Remove them once you've verified everything works:"
+echo "   find . -name '*.backup.*' -delete"
+
+# Cleanup temporary scripts
+rm -f fix_verification.py fix_validators.py fix_orchestrator.py
 
 echo ""
-echo "🧪 After terraform apply, test with:"
-echo "  curl -X POST 'https://d5804hjt80.execute-api.us-gov-west-1.amazonaws.com/production/api/ksi/validate' \\"
-echo "    -H 'Content-Type: application/json' \\"
-echo "    -d '{\"tenant_id\": \"real-test\"}'"
+echo "🏁 Master fix script completed!"

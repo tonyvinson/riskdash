@@ -128,7 +128,7 @@ def get_all_tenant_configurations() -> List[Dict]:
         return []
 
 def get_tenant_configurations(tenant_id: str) -> List[Dict]:
-    """Retrieve KSI configurations for a specific tenant"""
+    """Retrieve KSI configurations for a specific tenant - FIXED VERSION"""
     table = dynamodb.Table(TENANT_KSI_CONFIGURATIONS_TABLE)
     
     try:

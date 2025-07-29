@@ -171,45 +171,8 @@ const KSIManager = () => {
             const response = await ksiService.getValidationResults(selectedTenant);
             console.log('📊 Current KSI Data Response:', response);
             
-            // ✅ FIXED: Handle the actual API response structure
-            let results = [];
-            
-            if (response.success && response.data) {
-                // Check for validators_completed (the actual API structure)
-                if (response.data.validators_completed) {
-                    results = response.data.validators_completed;
-                    console.log('✅ Found validators_completed in response.data');
-                }
-                // Fallback: Check for validation_results 
-                else if (response.data.validation_results) {
-                    results = response.data.validation_results;
-                    console.log('✅ Found validation_results in response.data');
-                }
-                // Fallback: Check for results array directly in data
-                else if (response.data.results) {
-                    results = response.data.results;
-                    console.log('✅ Found results in response.data');
-                }
-                // Fallback: Check if data itself is an array
-                else if (Array.isArray(response.data)) {
-                    results = response.data;
-                    console.log('✅ Response.data is array of results');
-                }
-            }
-            // Fallback: Check top-level properties
-            else if (response.validators_completed) {
-                results = response.validators_completed;
-                console.log('✅ Found validators_completed at top level');
-            }
-            else if (response.results) {
-                results = response.results;
-                console.log('✅ Found results at top level');
-            }
-            
-            console.log('📊 Processing results:', results);
-            
-            if (results && results.length > 0) {
-                // Process the results for display
+            if (response.success && response.data && response.data.validation_results) {
+                const results = response.data.validation_results;
                 
                 // Process the results for display
                 const processedResults = results.map(result => {
@@ -247,11 +210,6 @@ const KSIManager = () => {
                 console.log(`✅ Loaded ${results.length} current KSI results`);
             } else {
                 console.log('ℹ️ No current KSI data found for this tenant');
-                console.log('🔍 Full response:', response);
-                console.log('🔍 Response structure:', Object.keys(response));
-                if (response.data) {
-                    console.log('🔍 Response.data structure:', Object.keys(response.data));
-                }
                 setValidationResults([]);
                 setComplianceOverview(null);
             }
@@ -288,25 +246,11 @@ const KSIManager = () => {
             // Find the execution in our current data first
             const execution = executionHistory.find(exec => exec.execution_id === executionId);
             
-            // ✅ FIXED: Check for different possible result locations
-                let resultsData = [];
-                
-                if (execution.validation_results) {
-                    resultsData = execution.validation_results;
-                    console.log('✅ Found validation_results in execution');
-                } else if (execution.validators_completed) {
-                    resultsData = execution.validators_completed;
-                    console.log('✅ Found validators_completed in execution');
-                } else if (execution.results) {
-                    resultsData = execution.results;
-                    console.log('✅ Found results in execution');
-                }
-                
-                if (resultsData.length > 0) {
+            if (execution && execution.validation_results) {
                 console.log('🎯 Found validation results in execution data:', execution.validation_results);
                 
                 // Parse the nested validation results with rich AWS data
-                const resultsData = resultsData.map(validationResult => {
+                const resultsData = execution.validation_results.map(validationResult => {
                     let resultBody = validationResult.result?.body;
                     let parsedBody = null;
                     

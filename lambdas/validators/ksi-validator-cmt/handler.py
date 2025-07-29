@@ -114,17 +114,27 @@ def lambda_handler(event, context):
         return create_error_response(error_msg, validator_type, execution_id, tenant_id)
 
 def get_tenant_configuration(tenant_id):
-    """Get tenant configuration from DynamoDB"""
+    """Get tenant configuration from DynamoDB - FIXED VERSION"""
     try:
         table_name = os.environ.get('TENANT_CONFIG_TABLE', 'riskuity-ksi-validator-tenant-configurations-production')
         table = default_dynamodb.Table(table_name)
         
-        response = table.get_item(Key={'tenant_id': tenant_id})
+        # ✅ FIXED: Use query() instead of get_item() for composite key table
+        response = table.query(
+            KeyConditionExpression='tenant_id = :tid',
+            ExpressionAttributeValues={':tid': tenant_id}
+        )
         
-        if 'Item' in response:
-            return response['Item']
+        configurations = response.get('Items', [])
+        
+        if configurations:
+            return {
+                'tenant_id': tenant_id,
+                'configurations': configurations,
+                'has_config': True
+            }
         else:
-            print(f"⚠️ Tenant {tenant_id} not found in configuration table")
+            print(f"⚠️ No configuration found for tenant: {tenant_id}")
             return None
             
     except Exception as e:
