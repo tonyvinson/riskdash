@@ -1,0 +1,48 @@
+#!/bin/bash
+# deploy-diagnostics.sh - Deploy diagnostic Lambda functions to troubleshoot
+set -e
+
+echo "🔧 Deploying diagnostic Lambda functions..."
+
+# 1. Replace Lambda handlers with diagnostic versions
+echo "📝 Step 1: Creating diagnostic Lambda handlers..."
+
+# Note: You need to save the diagnostic versions above as:
+# - lambdas/api/executions_handler.py 
+# - lambdas/api/results_handler.py
+
+echo "✅ Make sure you've saved the diagnostic versions above first!"
+
+# 2. Package the diagnostic functions
+echo "📝 Step 2: Packaging diagnostic Lambda functions..."
+./scripts/deploy_lambdas.sh package-only
+
+# 3. Deploy just the failing functions
+echo "📝 Step 3: Deploying diagnostic functions..."
+cd terraform
+terraform apply -target=module.api_gateway.aws_lambda_function.api_executions \
+                -target=module.api_gateway.aws_lambda_function.api_results \
+                -auto-approve
+cd ..
+
+echo ""
+echo "🧪 Testing diagnostic functions..."
+
+echo "Testing executions endpoint..."
+curl -H "Origin: http://localhost:3000" \
+  'https://d5804hjt80.execute-api.us-gov-west-1.amazonaws.com/production/api/ksi/executions?tenant_id=riskuity-production' \
+  | jq '.'
+
+echo ""
+echo "Testing results endpoint..."
+curl -H "Origin: http://localhost:3000" \
+  'https://d5804hjt80.execute-api.us-gov-west-1.amazonaws.com/production/api/ksi/results?tenant_id=riskuity-production' \
+  | jq '.'
+
+echo ""
+echo "🔍 Check CloudWatch logs for detailed error information:"
+echo "   aws logs tail /aws/lambda/riskuity-ksi-validator-api-executions-production --follow"
+echo "   aws logs tail /aws/lambda/riskuity-ksi-validator-api-results-production --follow"
+
+echo ""
+echo "✅ Diagnostic functions deployed!"

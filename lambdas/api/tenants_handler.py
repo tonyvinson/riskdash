@@ -4,51 +4,52 @@ import os
 from decimal import Decimal
 
 def lambda_handler(event, context):
-    """Handle GET /api/ksi/tenants - Return list of available tenants"""
+    """
+    Handler for GET /api/ksi/tenants endpoint
+    Returns list of configured tenants from DynamoDB
+    """
     
+    # CORS headers
     headers = {
-        'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
-        'Access-Control-Allow-Methods': 'GET,OPTIONS'
+        'Access-Control-Allow-Methods': 'GET,OPTIONS',
+        'Content-Type': 'application/json'
     }
     
     try:
-        # Handle CORS preflight
-        if event.get('httpMethod') == 'OPTIONS':
+        # Get table name from environment
+        table_name = os.environ.get('TENANT_KSI_CONFIGURATIONS_TABLE')
+        if not table_name:
             return {
-                'statusCode': 200,
+                'statusCode': 500,
                 'headers': headers,
-                'body': json.dumps({'message': 'CORS preflight successful'})
+                'body': json.dumps({'error': 'TENANT_KSI_CONFIGURATIONS_TABLE not configured'})
             }
         
-        # Get DynamoDB client
-        dynamodb = boto3.resource('dynamodb', region_name=os.environ.get('AWS_REGION', 'us-gov-west-1'))
-        table = dynamodb.Table(os.environ['TENANT_KSI_CONFIGURATIONS_TABLE'])
+        # Initialize DynamoDB
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table(table_name)
         
-        # Scan the table to get all tenants
-        response = table.scan()
-        items = response.get('Items', [])
+        # Scan for all tenant configurations
+        response = table.scan(
+            ProjectionExpression='tenant_id, tenant_name, #status',
+            ExpressionAttributeNames={
+                '#status': 'status'
+            }
+        )
         
-        # Process tenants and count KSIs
-        tenants_map = {}
-        for item in items:
-            tenant_id = item.get('tenant_id')
-            if tenant_id and tenant_id not in tenants_map:
-                tenants_map[tenant_id] = {
-                    'tenant_id': tenant_id,
-                    'ksi_count': 0,
-                    'display_name': format_tenant_name(tenant_id)
-                }
-            
-            if tenant_id:
-                tenants_map[tenant_id]['ksi_count'] += 1
+        # Format tenant data
+        tenants = []
+        for item in response.get('Items', []):
+            tenants.append({
+                'tenant_id': item.get('tenant_id', ''),
+                'tenant_name': format_tenant_name(item.get('tenant_id', '')),
+                'status': item.get('status', 'unknown')
+            })
         
-        # Convert to list and sort
-        tenants = list(tenants_map.values())
+        # Sort by tenant_id
         tenants.sort(key=lambda x: x['tenant_id'])
-        
-        print(f"✅ Retrieved {len(tenants)} tenants from DynamoDB")
         
         return {
             'statusCode': 200,
@@ -75,14 +76,16 @@ def format_tenant_name(tenant_id):
     if not tenant_id:
         return 'Unknown Tenant'
     
-    # Handle common patterns
     if tenant_id.startswith('tenant-'):
         number = tenant_id.replace('tenant-', '')
         return f'Tenant {number.upper()}'
-    elif tenant_id.startswith('real-test'):
-        return 'Real Test Tenant'
+    elif tenant_id == 'riskuity-production':
+        return 'Riskuity Production'
+    elif tenant_id == 'real-test':
+        return 'Real Test'
+    elif tenant_id == 'default':
+        return 'Default'
     else:
-        # Convert kebab-case to Title Case
         return tenant_id.replace('-', ' ').replace('_', ' ').title()
 
 def decimal_default(obj):

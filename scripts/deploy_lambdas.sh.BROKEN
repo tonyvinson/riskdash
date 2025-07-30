@@ -93,61 +93,39 @@ package_lambda() {
     log_success "Packaged $function_name -> terraform/$output_zip"
 }
 
-# ✅ FIXED: Package API Lambda functions with proper isolation
+# Package API Lambda functions
 package_api_lambdas() {
     log_info "=== Packaging API Lambda Functions ==="
     
-    # Save current directory
-    original_dir=$(pwd)
-    
     for api_func in validate executions results tenants; do
-        log_info "Processing API function: $api_func"
-        
         if [ -f "lambdas/api/${api_func}_handler.py" ]; then
-            # Create temporary directory for this specific API function
+            # Create temporary directory for this API function
             temp_api_dir=$(mktemp -d)
-            log_info "Created temp directory for $api_func: $temp_api_dir"
             
             # Copy handler with correct name for Lambda runtime
             cp "lambdas/api/${api_func}_handler.py" "$temp_api_dir/lambda_function.py"
-            log_info "Copied ${api_func}_handler.py -> lambda_function.py"
             
             # Copy shared modules if they exist
             if [ -d "shared" ]; then
                 cp -r shared "$temp_api_dir/"
-                log_info "Copied shared modules"
             fi
             
-            # Create zip file in the temp directory
+            # Create zip file
             cd "$temp_api_dir"
-            zip_name="api-$api_func.zip"
-            zip -r "$zip_name" . -q
+            zip -r "../api-$api_func.zip" . -q
+            cd - > /dev/null
             
-            # ✅ CRITICAL FIX: Move zip to correct location with absolute path
-            cd "$original_dir"
-            mv "$temp_api_dir/$zip_name" "terraform/$zip_name"
+            # Move to terraform directory
+            mv "$temp_api_dir/../api-$api_func.zip" "terraform/api-$api_func.zip"
             
-            # Verify the zip file was created correctly
-            if [ -f "terraform/$zip_name" ]; then
-                log_success "✅ Packaged API $api_func -> terraform/$zip_name"
-                
-                # ✅ DEBUG: Show what's inside the zip file
-                echo "   📋 Contents of $zip_name:"
-                unzip -l "terraform/$zip_name" | head -10
-            else
-                log_error "❌ Failed to create terraform/$zip_name"
-            fi
-            
-            # Cleanup temp directory
+            # Cleanup
             rm -rf "$temp_api_dir"
             
+            log_success "Packaged API $api_func -> terraform/api-$api_func.zip"
         else
             log_warning "API $api_func handler not found at lambdas/api/${api_func}_handler.py, skipping"
         fi
     done
-    
-    # Return to original directory
-    cd "$original_dir"
 }
 
 # Package Tenant Management Lambda functions
@@ -201,20 +179,15 @@ deploy_lambda_updates() {
         fi
     done
     
-    # ✅ FIXED: Update API functions with better error handling
+    # Update API functions
     for api_func in validate executions results tenants; do
         api_function="$PROJECT_NAME-api-$api_func-$ENVIRONMENT"
-        zip_file="terraform/api-$api_func.zip"
-        
         if aws lambda get-function --function-name "$api_function" >/dev/null 2>&1; then
-            if [ -f "$zip_file" ]; then
-                log_info "Updating $api_function with $zip_file"
+            if [ -f "terraform/api-$api_func.zip" ]; then
                 aws lambda update-function-code \
                     --function-name "$api_function" \
-                    --zip-file "fileb://$zip_file"
+                    --zip-file "fileb://terraform/api-$api_func.zip"
                 log_success "Updated API $api_func Lambda function"
-            else
-                log_warning "Zip file $zip_file not found for API function $api_func"
             fi
         else
             log_warning "API function $api_function not found (will be created by Terraform)"
@@ -267,42 +240,11 @@ package_all_lambdas() {
         fi
     done
     
-    # ✅ FIXED: Package API functions with improved logic
+    # Package API functions
     package_api_lambdas
     
     # Package tenant management functions
     package_tenant_management_lambdas
-    
-    # ✅ NEW: Verify all expected zip files were created
-    log_info "=== Verifying Packaged Files ==="
-    expected_files=(
-        "terraform/orchestrator.zip"
-        "terraform/validator-cna.zip"
-        "terraform/validator-svc.zip"
-        "terraform/validator-iam.zip"
-        "terraform/validator-mla.zip"
-        "terraform/validator-cmt.zip"
-        "terraform/api-validate.zip"
-        "terraform/api-executions.zip"
-        "terraform/api-results.zip"
-        "terraform/api-tenants.zip"
-    )
-    
-    missing_files=()
-    for file in "${expected_files[@]}"; do
-        if [ -f "$file" ]; then
-            log_success "✅ Found: $file"
-        else
-            log_warning "⚠️  Missing: $file"
-            missing_files+=("$file")
-        fi
-    done
-    
-    if [ ${#missing_files[@]} -eq 0 ]; then
-        log_success "🎉 All expected zip files created successfully!"
-    else
-        log_warning "Some zip files are missing. Check the source directories."
-    fi
 }
 
 # Main deployment process
@@ -343,29 +285,12 @@ case "${1:-deploy}" in
         rm -f terraform/*.zip
         log_success "Cleanup completed"
         ;;
-    "verify")
-        log_info "Verifying Lambda function handlers..."
-        # Check that each handler file exists and has the right entry point
-        for api_func in validate executions results tenants; do
-            handler_file="lambdas/api/${api_func}_handler.py"
-            if [ -f "$handler_file" ]; then
-                if grep -q "def lambda_handler" "$handler_file"; then
-                    log_success "✅ $handler_file has lambda_handler function"
-                else
-                    log_error "❌ $handler_file missing lambda_handler function"
-                fi
-            else
-                log_error "❌ $handler_file not found"
-            fi
-        done
-        ;;
     *)
-        echo "Usage: $0 [deploy|package-only|update-code|clean|verify]"
-        echo "  deploy       - Package all Lambda functions (default)"
+        echo "Usage: $0 [deploy|package-only|update-code|clean]"
+        echo "  deploy      - Package all Lambda functions (default)"
         echo "  package-only - Only package functions into zip files"
-        echo "  update-code  - Update existing Lambda function code"
-        echo "  clean        - Remove all zip files"
-        echo "  verify       - Verify handler files exist and are correct"
+        echo "  update-code - Update existing Lambda function code"
+        echo "  clean       - Remove all zip files"
         exit 1
         ;;
 esac

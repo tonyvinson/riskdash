@@ -1,414 +1,129 @@
 #!/bin/bash
-# complete-cors-fix.sh - Fix all CORS issues permanently
-
+# exact-fix.sh - Fix the exact issues based on actual codebase analysis
 set -e
 
-echo "🔧 Fixing all CORS issues permanently..."
+echo "🔧 Fixing exact issues in your codebase..."
 
-# 1. Fix the OPTIONS integration responses that are returning 500
-echo "📝 Step 1: Fixing OPTIONS integration responses..."
+# 1. Remove the broken cors_fix.tf file
+echo "📝 Step 1: Removing broken cors_fix.tf file..."
+rm -f terraform/modules/api_gateway/cors_fix.tf
+echo "✅ Removed broken cors_fix.tf"
 
-cd terraform/modules/api_gateway
-
-# Create backup
-cp main.tf main.tf.backup.$(date +%Y%m%d_%H%M%S)
-
-# Fix the CORS integration responses - they're likely missing proper request templates
-cat > cors_fix.tf << 'EOF'
-
-# =============================================================================
-# CORS FIXES - Replace broken OPTIONS integrations
-# =============================================================================
-
-# Fixed CORS integration for validate OPTIONS
-resource "aws_api_gateway_integration" "cors_validate_fixed" {
-  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
-  resource_id = aws_api_gateway_resource.validate.id
-  http_method = aws_api_gateway_method.cors_validate.http_method
-  type        = "MOCK"
-  
-  request_templates = {
-    "application/json" = "{\"statusCode\": 200}"
-  }
-  
-  depends_on = [aws_api_gateway_method.cors_validate]
-}
-
-# Fixed CORS integration for executions OPTIONS  
-resource "aws_api_gateway_integration" "cors_executions_fixed" {
-  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
-  resource_id = aws_api_gateway_resource.executions.id
-  http_method = aws_api_gateway_method.cors_executions.http_method
-  type        = "MOCK"
-  
-  request_templates = {
-    "application/json" = "{\"statusCode\": 200}"
-  }
-  
-  depends_on = [aws_api_gateway_method.cors_executions]
-}
-
-# Fixed CORS integration for results OPTIONS
-resource "aws_api_gateway_integration" "cors_results_fixed" {
-  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
-  resource_id = aws_api_gateway_resource.results.id
-  http_method = aws_api_gateway_method.cors_results.http_method
-  type        = "MOCK"
-  
-  request_templates = {
-    "application/json" = "{\"statusCode\": 200}"
-  }
-  
-  depends_on = [aws_api_gateway_method.cors_results]
-}
-
-# Fixed CORS integration responses
-resource "aws_api_gateway_integration_response" "cors_validate_fixed_200" {
-  depends_on = [aws_api_gateway_integration.cors_validate_fixed]
-  
-  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
-  resource_id = aws_api_gateway_resource.validate.id
-  http_method = aws_api_gateway_method.cors_validate.http_method
-  status_code = "200"
-  
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-    "method.response.header.Access-Control-Allow-Methods" = "'GET,POST,PUT,DELETE,OPTIONS'"
-    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
-  }
-}
-
-resource "aws_api_gateway_integration_response" "cors_executions_fixed_200" {
-  depends_on = [aws_api_gateway_integration.cors_executions_fixed]
-  
-  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
-  resource_id = aws_api_gateway_resource.executions.id
-  http_method = aws_api_gateway_method.cors_executions.http_method
-  status_code = "200"
-  
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-    "method.response.header.Access-Control-Allow-Methods" = "'GET,POST,PUT,DELETE,OPTIONS'"
-    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
-  }
-}
-
-resource "aws_api_gateway_integration_response" "cors_results_fixed_200" {
-  depends_on = [aws_api_gateway_integration.cors_results_fixed]
-  
-  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
-  resource_id = aws_api_gateway_resource.results.id
-  http_method = aws_api_gateway_method.cors_results.http_method
-  status_code = "200"
-  
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-    "method.response.header.Access-Control-Allow-Methods" = "'GET,POST,PUT,DELETE,OPTIONS'"
-    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
-  }
-}
-
-# Fix POST /validate integration response to include CORS headers
-resource "aws_api_gateway_integration_response" "validate_post_cors" {
-  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
-  resource_id = aws_api_gateway_resource.validate.id
-  http_method = aws_api_gateway_method.validate_post.http_method
-  status_code = "200"
-  
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Origin" = "'*'"
-  }
-  
-  depends_on = [aws_api_gateway_integration.validate_post]
-}
-
-# Add method response for POST /validate CORS
-resource "aws_api_gateway_method_response" "validate_post_cors" {
-  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
-  resource_id = aws_api_gateway_resource.validate.id
-  http_method = aws_api_gateway_method.validate_post.http_method
-  status_code = "200"
-  
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Origin" = false
-  }
-}
-EOF
-
-# 2. Remove old broken integrations from main.tf
-echo "📝 Step 2: Removing old broken CORS integrations..."
-
-# Comment out the old broken integrations to avoid conflicts
-sed -i.backup '
-/^resource "aws_api_gateway_integration" "cors_validate"/,/^}$/ {
-    s/^/# DISABLED - /
-}
-/^resource "aws_api_gateway_integration" "cors_executions"/,/^}$/ {
-    s/^/# DISABLED - /
-}
-/^resource "aws_api_gateway_integration" "cors_results"/,/^}$/ {
-    s/^/# DISABLED - /
-}
-/^resource "aws_api_gateway_integration_response" "cors_validate"/,/^}$/ {
-    s/^/# DISABLED - /
-}
-/^resource "aws_api_gateway_integration_response" "cors_executions"/,/^}$/ {
-    s/^/# DISABLED - /
-}
-/^resource "aws_api_gateway_integration_response" "cors_results"/,/^}$/ {
-    s/^/# DISABLED - /
-}
-' main.tf
-
-# 3. Create the missing tenants endpoint
-echo "📝 Step 3: Creating missing tenants endpoint..."
-
-cd ../../../
-
-# Create tenants Lambda function
-mkdir -p lambdas/api
-cat > lambdas/api/tenants_lambda.py << 'EOF'
+# 2. Create the missing tenants_handler.py (your terraform expects it)
+echo "📝 Step 2: Creating missing tenants_handler.py..."
+cat > lambdas/api/tenants_handler.py << 'EOF'
 import json
 import boto3
 import os
 from decimal import Decimal
 
 def lambda_handler(event, context):
-    """Handle GET /api/ksi/tenants - Return list of available tenants"""
+    """
+    Handler for GET /api/ksi/tenants endpoint
+    Returns list of configured tenants from DynamoDB
+    """
     
+    # CORS headers
     headers = {
-        'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
-        'Access-Control-Allow-Methods': 'GET,OPTIONS'
+        'Access-Control-Allow-Methods': 'GET,OPTIONS',
+        'Content-Type': 'application/json'
     }
     
     try:
-        # Handle CORS preflight
-        if event.get('httpMethod') == 'OPTIONS':
+        # Get table name from environment
+        table_name = os.environ.get('TENANT_KSI_CONFIGURATIONS_TABLE')
+        if not table_name:
             return {
-                'statusCode': 200,
+                'statusCode': 500,
                 'headers': headers,
-                'body': json.dumps({'message': 'CORS preflight successful'})
+                'body': json.dumps({'error': 'TENANT_KSI_CONFIGURATIONS_TABLE not configured'})
             }
         
-        # Get DynamoDB client
-        dynamodb = boto3.resource('dynamodb', region_name=os.environ.get('AWS_REGION', 'us-gov-west-1'))
-        table_name = os.environ.get('TENANT_KSI_CONFIGURATIONS_TABLE', 'riskuity-ksi-validator-tenant-ksi-configurations-production')
+        # Initialize DynamoDB
+        dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table(table_name)
         
-        # Scan for unique tenant IDs
-        response = table.scan(ProjectionExpression='tenant_id')
-        items = response.get('Items', [])
+        # Scan for all tenant configurations
+        response = table.scan(
+            ProjectionExpression='tenant_id, tenant_name, #status',
+            ExpressionAttributeNames={
+                '#status': 'status'
+            }
+        )
         
-        # Get unique tenants
-        tenant_ids = list(set(item.get('tenant_id') for item in items if item.get('tenant_id')))
-        tenant_ids.sort()
+        # Format tenant data
+        tenants = []
+        for item in response.get('Items', []):
+            tenants.append({
+                'tenant_id': item.get('tenant_id', ''),
+                'tenant_name': format_tenant_name(item.get('tenant_id', '')),
+                'status': item.get('status', 'unknown')
+            })
+        
+        # Sort by tenant_id
+        tenants.sort(key=lambda x: x['tenant_id'])
         
         return {
             'statusCode': 200,
             'headers': headers,
             'body': json.dumps({
-                'success': True,
-                'data': tenant_ids,
-                'total_count': len(tenant_ids)
-            }, default=lambda x: float(x) if isinstance(x, Decimal) else str(x))
+                'tenants': tenants,
+                'total_count': len(tenants)
+            }, default=decimal_default)
         }
         
     except Exception as e:
+        print(f"❌ Error retrieving tenants: {str(e)}")
         return {
             'statusCode': 500,
             'headers': headers,
             'body': json.dumps({
-                'success': False,
-                'error': str(e)
+                'error': 'Failed to retrieve tenants',
+                'message': str(e)
             })
         }
+
+def format_tenant_name(tenant_id):
+    """Convert tenant-001 to 'Tenant 001' for better display"""
+    if not tenant_id:
+        return 'Unknown Tenant'
+    
+    if tenant_id.startswith('tenant-'):
+        number = tenant_id.replace('tenant-', '')
+        return f'Tenant {number.upper()}'
+    elif tenant_id == 'riskuity-production':
+        return 'Riskuity Production'
+    elif tenant_id == 'real-test':
+        return 'Real Test'
+    elif tenant_id == 'default':
+        return 'Default'
+    else:
+        return tenant_id.replace('-', ' ').replace('_', ' ').title()
+
+def decimal_default(obj):
+    """JSON serializer for Decimal objects"""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 EOF
+echo "✅ Created tenants_handler.py"
 
-# Package Lambda
-cd lambdas/api
-zip tenants.zip tenants_lambda.py
-mv tenants.zip ../../terraform/modules/api_gateway/
-cd ../../
+# 3. Use your existing deploy script to package everything
+echo "📝 Step 3: Using your existing deploy script..."
+./scripts/deploy_lambdas.sh package-only
+echo "✅ All lambdas packaged"
 
-# 4. Add tenants endpoint to Terraform
-echo "📝 Step 4: Adding tenants endpoint to Terraform..."
+# 4. Deploy
+echo "🚀 Step 4: Deploy with terraform..."
+cd terraform
+terraform apply -auto-approve
+cd ..
 
-cd terraform/modules/api_gateway
-
-cat >> cors_fix.tf << 'EOF'
-
-# =============================================================================
-# TENANTS ENDPOINT - Missing endpoint that causes 403
-# =============================================================================
-
-# /tenants resource
-resource "aws_api_gateway_resource" "tenants" {
-  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
-  parent_id   = aws_api_gateway_resource.ksi.id
-  path_part   = "tenants"
-}
-
-# GET /tenants method
-resource "aws_api_gateway_method" "tenants_get" {
-  rest_api_id   = aws_api_gateway_rest_api.ksi_api.id
-  resource_id   = aws_api_gateway_resource.tenants.id
-  http_method   = "GET"
-  authorization = "NONE"
-}
-
-# OPTIONS /tenants method for CORS
-resource "aws_api_gateway_method" "tenants_options" {
-  rest_api_id   = aws_api_gateway_rest_api.ksi_api.id
-  resource_id   = aws_api_gateway_resource.tenants.id
-  http_method   = "OPTIONS"
-  authorization = "NONE"
-}
-
-# Lambda function for tenants
-resource "aws_lambda_function" "tenants" {
-  function_name = "${var.project_name}-api-tenants-${var.environment}"
-  role          = aws_iam_role.api_lambda_role.arn
-  handler       = "tenants_lambda.lambda_handler"
-  runtime       = var.lambda_runtime
-  timeout       = var.lambda_timeout
-  memory_size   = var.lambda_memory_size
-  
-  filename         = "tenants.zip"
-  source_code_hash = filebase64sha256("tenants.zip")
-  
-  environment {
-    variables = {
-      ENVIRONMENT = var.environment
-      TENANT_KSI_CONFIGURATIONS_TABLE = var.tenant_ksi_configurations_table_name
-      AWS_REGION = var.aws_region
-    }
-  }
-}
-
-# Lambda permission
-resource "aws_lambda_permission" "tenants_invoke" {
-  statement_id  = "AllowExecutionFromAPIGateway"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.tenants.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.ksi_api.execution_arn}/*/*"
-}
-
-# GET integration
-resource "aws_api_gateway_integration" "tenants_get" {
-  rest_api_id             = aws_api_gateway_rest_api.ksi_api.id
-  resource_id             = aws_api_gateway_resource.tenants.id
-  http_method             = aws_api_gateway_method.tenants_get.http_method
-  integration_http_method = "POST"
-  type                    = "AWS_PROXY"
-  uri                     = aws_lambda_function.tenants.invoke_arn
-}
-
-# OPTIONS integration for CORS
-resource "aws_api_gateway_integration" "tenants_options" {
-  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
-  resource_id = aws_api_gateway_resource.tenants.id
-  http_method = aws_api_gateway_method.tenants_options.http_method
-  type        = "MOCK"
-  
-  request_templates = {
-    "application/json" = "{\"statusCode\": 200}"
-  }
-}
-
-# Method responses
-resource "aws_api_gateway_method_response" "tenants_get_200" {
-  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
-  resource_id = aws_api_gateway_resource.tenants.id
-  http_method = aws_api_gateway_method.tenants_get.http_method
-  status_code = "200"
-  
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Origin" = false
-  }
-}
-
-resource "aws_api_gateway_method_response" "tenants_options_200" {
-  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
-  resource_id = aws_api_gateway_resource.tenants.id
-  http_method = aws_api_gateway_method.tenants_options.http_method
-  status_code = "200"
-  
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Headers" = false
-    "method.response.header.Access-Control-Allow-Methods" = false
-    "method.response.header.Access-Control-Allow-Origin"  = false
-  }
-}
-
-# Integration responses
-resource "aws_api_gateway_integration_response" "tenants_get_200" {
-  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
-  resource_id = aws_api_gateway_resource.tenants.id
-  http_method = aws_api_gateway_method.tenants_get.http_method
-  status_code = "200"
-  
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Origin" = "'*'"
-  }
-  
-  depends_on = [aws_api_gateway_integration.tenants_get]
-}
-
-resource "aws_api_gateway_integration_response" "tenants_options_200" {
-  rest_api_id = aws_api_gateway_rest_api.ksi_api.id
-  resource_id = aws_api_gateway_resource.tenants.id
-  http_method = aws_api_gateway_method.tenants_options.http_method
-  status_code = "200"
-  
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-    "method.response.header.Access-Control-Allow-Methods" = "'GET,OPTIONS'"
-    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
-  }
-  
-  depends_on = [aws_api_gateway_integration.tenants_options]
-}
-
-# Add required variable
-variable "tenant_ksi_configurations_table_name" {
-  description = "Name of the tenant KSI configurations DynamoDB table"
-  type        = string
-  default     = "riskuity-ksi-validator-tenant-ksi-configurations-production"
-}
-EOF
-
-# 5. Update main terraform to pass variables
-cd ../../
-echo "📝 Step 5: Updating main terraform..."
-
-# Add the variable to api_gateway module if not present
-if ! grep -q "tenant_ksi_configurations_table_name" main.tf; then
-    sed -i.backup '/module "api_gateway" {/,/}/ {
-        /depends_on = \[module.lambda, module.dynamodb\]/i\
-  \
-  # DynamoDB table references\
-  tenant_ksi_configurations_table_name = module.dynamodb.tenant_ksi_configurations_table_name
-    }' main.tf
-fi
-
-# 6. Deploy the fixes
-echo "🚀 Step 6: Deploying CORS fixes..."
-
-# First deploy the Lambda function
-terraform plan -target=module.api_gateway.aws_lambda_function.tenants
-terraform apply -target=module.api_gateway.aws_lambda_function.tenants -auto-approve
-
-# Then deploy all API Gateway changes
-terraform apply -target=module.api_gateway -auto-approve
-
-echo ""
-echo "✅ CORS fixes deployed!"
 echo ""
 echo "🧪 Test the fixes:"
-echo "curl -X OPTIONS -H 'Origin: http://localhost:3000' 'https://d5804hjt80.execute-api.us-gov-west-1.amazonaws.com/production/api/ksi/validate'"
-echo "curl 'https://d5804hjt80.execute-api.us-gov-west-1.amazonaws.com/production/api/ksi/tenants'"
+echo "   curl 'https://d5804hjt80.execute-api.us-gov-west-1.amazonaws.com/production/api/ksi/tenants'"
+echo "   curl -X OPTIONS -H 'Origin: http://localhost:3000' 'https://d5804hjt80.execute-api.us-gov-west-1.amazonaws.com/production/api/ksi/validate'"
 echo ""
-echo "🎯 Your React app should now work without CORS errors!"
+echo "✅ Fixed the exact issues in your codebase!"

@@ -1,104 +1,107 @@
 import json
 import boto3
-import logging
-from datetime import datetime, timezone
-from typing import Dict, Any, List
 import os
 from decimal import Decimal
-
-# Configure logging
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-
-# Initialize AWS clients
-dynamodb = boto3.resource('dynamodb')
-
-# Environment variables
-ENVIRONMENT = os.environ['ENVIRONMENT']
-KSI_EXECUTION_HISTORY_TABLE = os.environ['KSI_EXECUTION_HISTORY_TABLE']
+from datetime import datetime, timezone
 
 def decimal_default(obj):
-    """JSON serializer for objects not serializable by default json code"""
+    """JSON serializer for DynamoDB Decimal objects"""
     if isinstance(obj, Decimal):
         return float(obj)
     raise TypeError
 
 def lambda_handler(event, context):
     """
-    API Handler for GET /api/ksi/executions
-    Retrieves KSI execution history from DynamoDB using GSI for efficient querying
+    Diagnostic version - API endpoint for getting KSI execution history
     """
+    
+    # CORS headers for all responses
+    cors_headers = {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+        'Access-Control-Allow-Methods': 'GET,OPTIONS'
+    }
+    
     try:
-        # Parse query parameters
+        # Step 1: Check environment variables
+        table_name = os.environ.get('KSI_EXECUTION_HISTORY_TABLE')
+        print(f"🔍 Environment check - Table name: {table_name}")
+        
+        if not table_name:
+            return {
+                'statusCode': 500,
+                'headers': cors_headers,
+                'body': json.dumps({
+                    'success': False,
+                    'error': 'KSI_EXECUTION_HISTORY_TABLE environment variable not set',
+                    'debug': {
+                        'available_env_vars': list(os.environ.keys()),
+                        'function_name': context.function_name if context else 'unknown'
+                    }
+                })
+            }
+        
+        # Step 2: Try to connect to DynamoDB
+        print(f"🔍 Connecting to DynamoDB...")
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table(table_name)
+        
+        # Step 3: Check query parameters
         query_params = event.get('queryStringParameters') or {}
-        tenant_id = query_params.get('tenant_id', 'default')  # Default to 'default' if not provided
-        limit = int(query_params.get('limit', 50))
-        start_key = query_params.get('start_key')
+        tenant_id = query_params.get('tenant_id', 'all')
+        limit = int(query_params.get('limit', 20))
         
-        # Validate limit
-        if limit > 100:
-            limit = 100
+        print(f"🔍 Query params - tenant_id: {tenant_id}, limit: {limit}")
         
-        logger.info(f"Fetching executions for tenant: {tenant_id}, limit: {limit}")
+        # Step 4: Try a simple scan first (without filters)
+        print(f"🔍 Attempting table scan...")
+        response = table.scan(Limit=5)  # Just get 5 items for testing
         
-        table = dynamodb.Table(KSI_EXECUTION_HISTORY_TABLE)
+        items = response.get('Items', [])
+        print(f"🔍 Scan successful - found {len(items)} items")
         
-        # Use GSI to query by tenant_id efficiently
-        query_params_gsi = {
-            'IndexName': 'tenant-timestamp-index',
-            'KeyConditionExpression': boto3.dynamodb.conditions.Key('tenant_id').eq(tenant_id),
-            'Limit': limit,
-            'ScanIndexForward': False  # Sort by timestamp descending (most recent first)
-        }
-        
-        # Add pagination if start_key provided
-        if start_key:
-            try:
-                query_params_gsi['ExclusiveStartKey'] = json.loads(start_key)
-            except json.JSONDecodeError:
-                logger.warning(f"Invalid start_key format: {start_key}")
-        
-        # Execute GSI query
-        response = table.query(**query_params_gsi)
-        
-        executions = response.get('Items', [])
-        last_evaluated_key = response.get('LastEvaluatedKey')
-        
-        logger.info(f"Retrieved {len(executions)} executions for tenant {tenant_id}")
-        
-        # Build API response
-        api_response = {
+        # Step 5: Return diagnostic info
+        return {
             'statusCode': 200,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type',
-                'Access-Control-Allow-Methods': 'GET, OPTIONS'
-            },
+            'headers': cors_headers,
             'body': json.dumps({
                 'success': True,
+                'debug': {
+                    'table_name': table_name,
+                    'tenant_id_requested': tenant_id,
+                    'limit_requested': limit,
+                    'items_found': len(items),
+                    'sample_item_keys': [list(item.keys()) for item in items[:2]] if items else [],
+                    'function_name': context.function_name if context else 'unknown',
+                    'aws_region': os.environ.get('AWS_REGION', 'unknown')
+                },
                 'data': {
-                    'executions': executions,
-                    'count': len(executions),
-                    'tenant_id': tenant_id,
-                    'next_page_key': json.dumps(last_evaluated_key) if last_evaluated_key else None
+                    'executions': items,
+                    'count': len(items),
+                    'message': 'Diagnostic scan successful'
                 }
             }, default=decimal_default)
         }
         
-        return api_response
-        
     except Exception as e:
-        logger.error(f"Error fetching executions: {str(e)}")
+        print(f"❌ Error in executions handler: {str(e)}")
+        print(f"❌ Error type: {type(e).__name__}")
+        
+        import traceback
+        traceback.print_exc()
+        
         return {
             'statusCode': 500,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-            },
+            'headers': cors_headers,
             'body': json.dumps({
                 'success': False,
-                'error': str(e),
-                'message': 'Failed to fetch execution history'
-            }, default=decimal_default)
+                'error': f'{type(e).__name__}: {str(e)}',
+                'debug': {
+                    'table_name': os.environ.get('KSI_EXECUTION_HISTORY_TABLE', 'NOT_SET'),
+                    'function_name': context.function_name if context else 'unknown',
+                    'aws_region': os.environ.get('AWS_REGION', 'unknown'),
+                    'available_env_vars': list(os.environ.keys())
+                }
+            })
         }

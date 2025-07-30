@@ -122,7 +122,53 @@ resource "aws_iam_role_policy_attachment" "api_lambda_invoke" {
 # API LAMBDA FUNCTIONS
 # =============================================================================
 
+resource "aws_lambda_function" "api_validate" {
+  function_name = "${var.project_name}-api-validate-${var.environment}"
+  role          = aws_iam_role.api_lambda_role.arn
+  handler       = "tenants_handler.lambda_handler"
+  runtime       = var.lambda_runtime
+  timeout       = var.lambda_timeout
+  memory_size   = var.lambda_memory_size
+  
+  filename         = "api-validate.zip"
+  source_code_hash = filebase64sha256("api-validate.zip")
+  
+  environment {
+    variables = {
+      ENVIRONMENT = var.environment
+      ORCHESTRATOR_LAMBDA_ARN = local.orchestrator_lambda_arn
+    }
+  }
+  
+  tags = {
+    Name = "KSI API Validate"
+    Purpose = "API endpoint for triggering KSI validations"
+  }
+}
 
+resource "aws_lambda_function" "api_executions" {
+  function_name = "${var.project_name}-api-executions-${var.environment}"
+  role          = aws_iam_role.api_lambda_role.arn
+  handler       = "tenants_handler.lambda_handler"
+  runtime       = var.lambda_runtime
+  timeout       = var.lambda_timeout
+  memory_size   = var.lambda_memory_size
+  
+  filename         = "api-executions.zip"
+  source_code_hash = filebase64sha256("api-executions.zip")
+  
+  environment {
+    variables = {
+      ENVIRONMENT = var.environment
+      KSI_EXECUTION_HISTORY_TABLE = var.ksi_execution_history_table
+    }
+  }
+  
+  tags = {
+    Name = "KSI API Executions"
+    Purpose = "API endpoint for retrieving execution history"
+  }
+}
 
 resource "aws_lambda_function" "api_results" {
   function_name = "${var.project_name}-api-results-${var.environment}"
