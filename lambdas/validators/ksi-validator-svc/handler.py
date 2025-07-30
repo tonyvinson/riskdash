@@ -1,666 +1,365 @@
-import boto3
 import json
-from datetime import datetime
-import traceback
+import boto3
+import logging
+from datetime import datetime, timezone
+from typing import Dict, List, Any
 import os
-from botocore.exceptions import ClientError, NoCredentialsError
 
-# Default clients for RiskDash account operations
-default_sts_client = boto3.client('sts')
-default_dynamodb = boto3.resource('dynamodb')
+# Configure logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# Initialize AWS clients
+dynamodb = boto3.resource('dynamodb')
+
+# Environment variables
+VALIDATOR_TYPE = os.environ.get('VALIDATOR_TYPE', 'cna').upper()
+KSI_DEFINITIONS_TABLE = os.environ['KSI_DEFINITIONS_TABLE']
+KSI_EXECUTION_HISTORY_TABLE = os.environ['KSI_EXECUTION_HISTORY_TABLE']
+ENVIRONMENT = os.environ.get('ENVIRONMENT', 'production')
 
 def lambda_handler(event, context):
     """
-    Multitenant KSI Validator with tenant-specific role assumption
+    KSI Validator Lambda Handler - Retrieves CLI Commands from DynamoDB
+    Validates Key Security Indicators for FedRAMP-20x compliance
     """
     try:
+        logger.info(f"KSI Validator {VALIDATOR_TYPE} started with execution: {event.get('execution_id')}")
+        
         execution_id = event.get('execution_id')
-        tenant_id = event.get('tenant_id', 'default')
+        tenant_id = event.get('tenant_id')
         ksis = event.get('ksis', [])
         
-        # Extract validator type from function name
-        function_name = context.function_name
-        if 'cna' in function_name.lower():
-            validator_type = 'CNA'
-        elif 'svc' in function_name.lower():
-            validator_type = 'SVC'
-        elif 'iam' in function_name.lower():
-            validator_type = 'IAM'
-        elif 'mla' in function_name.lower():
-            validator_type = 'MLA'
-        elif 'cmt' in function_name.lower():
-            validator_type = 'CMT'
-        else:
-            validator_type = 'UNKNOWN'
+        if not execution_id or not tenant_id:
+            raise ValueError("Missing required execution_id or tenant_id")
         
-        print(f"🔍 Validator {validator_type} processing {len(ksis)} KSIs for tenant {tenant_id}")
+        validation_results = []
         
-        # Get tenant configuration (including role ARN)
-        tenant_config = get_tenant_configuration(tenant_id)
-        if not tenant_config:
-            print(f"❌ No configuration found for tenant {tenant_id}")
-            return create_error_response(f"Tenant {tenant_id} not found", validator_type, execution_id, tenant_id)
-        
-        # Get AWS clients for this tenant (assume role if needed)
-        aws_clients = get_tenant_aws_clients(tenant_config)
-        if not aws_clients:
-            print(f"❌ Failed to get AWS clients for tenant {tenant_id}")
-            return create_error_response(f"Failed to assume role for tenant {tenant_id}", validator_type, execution_id, tenant_id)
-        
-        results = []
-        
-        for ksi in ksis:
-            if should_validate_ksi(ksi, validator_type):
-                ksi_id = ksi['ksi_id']
-                print(f"🧪 Validating {ksi_id} with {validator_type} validator for tenant {tenant_id}")
+        for ksi_config in ksis:
+            try:
+                ksi_id = ksi_config.get('ksi_id')
+                logger.info(f"Processing KSI: {ksi_id}")
                 
-                # Execute validation using tenant's AWS clients
-                validation_result = execute_tenant_validation(ksi_id, validator_type, aws_clients, tenant_config)
+                # Get KSI definition from DynamoDB (THIS IS THE KEY!)
+                ksi_definition = get_ksi_definition(ksi_id)
+                if not ksi_definition:
+                    logger.warning(f"KSI definition not found for {ksi_id}")
+                    continue
                 
-                result = {
+                # Extract CLI commands from DynamoDB definition
+                validation_commands = ksi_definition.get('validation_commands', [])
+                
+                if not validation_commands:
+                    logger.info(f"No CLI commands defined for {ksi_id}")
+                    continue
+                
+                logger.info(f"Executing {len(validation_commands)} CLI commands for {ksi_id}")
+                
+                # Execute CLI commands from DynamoDB
+                command_results = []
+                successful_commands = 0
+                failed_commands = 0
+                
+                for cmd_info in validation_commands:
+                    command = cmd_info.get('command')
+                    note = cmd_info.get('note', '')
+                    
+                    try:
+                        if command == 'evidence_check':
+                            result = execute_evidence_check(ksi_id, note)
+                        else:
+                            result = execute_aws_command(command)
+                        
+                        command_results.append({
+                            "success": True,
+                            "command": command,
+                            "note": note,
+                            "data": result
+                        })
+                        successful_commands += 1
+                        logger.info(f"✅ Command succeeded: {command}")
+                        
+                    except Exception as cmd_error:
+                        command_results.append({
+                            "success": False,
+                            "command": command,
+                            "note": note,
+                            "error": str(cmd_error)
+                        })
+                        failed_commands += 1
+                        logger.error(f"❌ Command failed: {command} - {str(cmd_error)}")
+                
+                # Analyze results and determine KSI assertion
+                analysis = analyze_ksi_results(ksi_definition, command_results)
+                
+                # Create comprehensive validation result with CLI command details
+                validation_result = {
                     'ksi_id': ksi_id,
                     'validation_id': ksi_id,
-                    'validator_type': validator_type,
-                    'timestamp': datetime.utcnow().isoformat() + '+00:00',
+                    'validator_type': VALIDATOR_TYPE,
+                    'assertion': analysis['assertion'],
+                    'assertion_reason': analysis['assertion_reason'],
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
                     'validation_method': 'automated',
-                    'tenant_id': tenant_id,
-                    **validation_result
+                    'commands_executed': len(validation_commands),
+                    'successful_commands': successful_commands,
+                    'failed_commands': failed_commands,
+                    'cli_command_details': command_results  # FedRAMP 20x REQUIREMENT!
                 }
                 
-                results.append(result)
-                print(f"✅ Completed validation for {ksi_id}: {result['assertion']}")
+                validation_results.append(validation_result)
+                
+                # Save individual validator result to DynamoDB
+                save_ksi_result(execution_id, tenant_id, validation_result)
+                
+                logger.info(f"✅ Completed {ksi_id}: {'PASS' if analysis['assertion'] else 'FAIL'}")
+                
+            except Exception as ksi_error:
+                logger.error(f"Error processing KSI {ksi_config.get('ksi_id')}: {str(ksi_error)}")
+                error_result = {
+                    'ksi_id': ksi_config.get('ksi_id'),
+                    'validator_type': VALIDATOR_TYPE,
+                    'assertion': False,
+                    'assertion_reason': f"❌ Validation failed: {str(ksi_error)}",
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'validation_method': 'error',
+                    'commands_executed': 0,
+                    'successful_commands': 0,
+                    'failed_commands': 0,
+                    'cli_command_details': []
+                }
+                validation_results.append(error_result)
+                save_ksi_result(execution_id, tenant_id, error_result)
         
-        if not results:
-            print(f"ℹ️ No KSIs for {validator_type} validator to process")
-            return {
-                'statusCode': 200,
-                'body': json.dumps({
-                    'validator_type': validator_type,
-                    'execution_id': execution_id,
-                    'tenant_id': tenant_id,
-                    'message': f'No KSIs assigned to {validator_type} validator',
-                    'ksis_validated': 0,
-                    'results': []
-                })
-            }
+        # Generate summary
+        summary = generate_summary(validation_results)
         
-        summary = {
-            'total_ksis': len(results),
-            'passed': sum(1 for r in results if r['assertion']),
-            'failed': sum(1 for r in results if not r['assertion']),
-            'validator_type': validator_type
-        }
-        summary['pass_rate'] = (summary['passed'] / summary['total_ksis'] * 100) if summary['total_ksis'] > 0 else 0
-        
-        print(f"📊 Validation summary: {summary['passed']}/{summary['total_ksis']} passed ({summary['pass_rate']:.1f}%)")
-        
-        return {
+        response = {
             'statusCode': 200,
             'body': json.dumps({
-                'validator_type': validator_type,
+                'validator_type': VALIDATOR_TYPE,
                 'execution_id': execution_id,
                 'tenant_id': tenant_id,
-                'ksis_validated': len(results),
-                'results': results,
+                'ksis_validated': len(validation_results),
+                'results': validation_results,
                 'summary': summary
             })
         }
         
+        logger.info(f"KSI Validator {VALIDATOR_TYPE} completed: {len(validation_results)} validations")
+        return response
+        
     except Exception as e:
-        error_msg = f"Validator error: {str(e)}"
-        print(f"❌ {error_msg}")
-        traceback.print_exc()
-        
-        return create_error_response(error_msg, validator_type, execution_id, tenant_id)
+        logger.error(f"KSI Validator {VALIDATOR_TYPE} critical error: {str(e)}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({
+                'validator_type': VALIDATOR_TYPE,
+                'error': str(e),
+                'execution_id': event.get('execution_id'),
+                'tenant_id': event.get('tenant_id')
+            })
+        }
 
-def get_tenant_configuration(tenant_id):
-    """Get tenant configuration from DynamoDB - FIXED VERSION"""
+def get_ksi_definition(ksi_id: str) -> Dict:
+    """Get KSI definition from DynamoDB - ACTUAL IMPLEMENTATION"""
     try:
-        table_name = os.environ.get('TENANT_CONFIG_TABLE', 'riskuity-ksi-validator-tenant-configurations-production')
-        table = default_dynamodb.Table(table_name)
+        table = dynamodb.Table(KSI_DEFINITIONS_TABLE)
         
-        # ✅ FIXED: Use query() instead of get_item() for composite key table
-        response = table.query(
-            KeyConditionExpression='tenant_id = :tid',
-            ExpressionAttributeValues={':tid': tenant_id}
+        # Query DynamoDB for KSI definition
+        response = table.get_item(
+            Key={
+                'ksi_id': ksi_id,
+                'version': '1.0'  # Using version from your data structure
+            }
         )
         
-        configurations = response.get('Items', [])
-        
-        if configurations:
-            return {
-                'tenant_id': tenant_id,
-                'configurations': configurations,
-                'has_config': True
-            }
+        if 'Item' in response:
+            logger.info(f"✅ Retrieved KSI definition for {ksi_id}")
+            return response['Item']
         else:
-            print(f"⚠️ No configuration found for tenant: {tenant_id}")
+            logger.warning(f"❌ KSI definition not found for {ksi_id}")
             return None
             
     except Exception as e:
-        print(f"❌ Error getting tenant configuration: {str(e)}")
+        logger.error(f"Error getting KSI definition for {ksi_id}: {str(e)}")
         return None
 
-def get_tenant_aws_clients(tenant_config):
-    """Get AWS clients for tenant account (assume role if needed)"""
+def execute_aws_command(command: str) -> Dict:
+    """Execute AWS CLI command using boto3 for Lambda environment"""
     try:
-        # Check if tenant has a specific role ARN
-        tenant_role_arn = tenant_config.get('role_arn')
+        logger.info(f"Executing: {command}")
         
-        if tenant_role_arn and tenant_role_arn != 'default':
-            print(f"🔐 Assuming role for tenant: {tenant_role_arn}")
-            
-            # Assume the tenant's role
-            external_id = tenant_config.get('external_id', 'RiskDash-FedRAMP-Validation')
-            
-            assumed_role = default_sts_client.assume_role(
-                RoleArn=tenant_role_arn,
-                RoleSessionName=f"RiskDash-Validation-{int(datetime.utcnow().timestamp())}",
-                ExternalId=external_id,
-                DurationSeconds=3600  # 1 hour
-            )
-            
-            credentials = assumed_role['Credentials']
-            
-            # Create clients with assumed role credentials
-            session = boto3.Session(
-                aws_access_key_id=credentials['AccessKeyId'],
-                aws_secret_access_key=credentials['SecretAccessKey'],
-                aws_session_token=credentials['SessionToken']
-            )
-            
-            clients = {
-                'ec2': session.client('ec2'),
-                'route53': session.client('route53'),
-                'kms': session.client('kms'),
-                'secretsmanager': session.client('secretsmanager'),
-                'iam': session.client('iam'),
-                'cloudtrail': session.client('cloudtrail'),
-                'cloudwatch': session.client('cloudwatch'),
-                'sns': session.client('sns'),
-                'config': session.client('config'),
-                'cloudformation': session.client('cloudformation'),
-                's3': session.client('s3')
-            }
-            
-            print(f"✅ Successfully assumed role for tenant")
-            return clients
-            
-        else:
-            print(f"🏠 Using RiskDash account credentials for tenant {tenant_config.get('tenant_id', 'unknown')}")
-            
-            # Use default credentials (RiskDash account)
+        # Convert AWS CLI commands to boto3 calls
+        if "describe-subnets" in command:
+            ec2 = boto3.client('ec2')
+            response = ec2.describe_subnets()
+            subnets = response.get('Subnets', [])
+            availability_zones = set(subnet.get('AvailabilityZone') for subnet in subnets)
             return {
-                'ec2': boto3.client('ec2'),
-                'route53': boto3.client('route53'),
-                'kms': boto3.client('kms'),
-                'secretsmanager': boto3.client('secretsmanager'),
-                'iam': boto3.client('iam'),
-                'cloudtrail': boto3.client('cloudtrail'),
-                'cloudwatch': boto3.client('cloudwatch'),
-                'sns': boto3.client('sns'),
-                'config': boto3.client('config'),
-                'cloudformation': boto3.client('cloudformation'),
-                's3': boto3.client('s3')
-            }
-            
-    except ClientError as e:
-        error_code = e.response['Error']['Code']
-        if error_code == 'AccessDenied':
-            print(f"❌ Access denied when assuming role: {tenant_role_arn}")
-        elif error_code == 'InvalidUserID.NotFound':
-            print(f"❌ Role not found: {tenant_role_arn}")
-        else:
-            print(f"❌ AWS error assuming role: {error_code} - {str(e)}")
-        return None
-        
-    except Exception as e:
-        print(f"❌ Error assuming tenant role: {str(e)}")
-        return None
-
-def should_validate_ksi(ksi, validator_type):
-    """Check if this validator should handle this KSI"""
-    ksi_id = ksi.get('ksi_id', '')
-    
-    validator_mappings = {
-        'CNA': ['KSI-CNA-'],
-        'SVC': ['KSI-SVC-'],
-        'IAM': ['KSI-IAM-'],
-        'MLA': ['KSI-MLA-'],
-        'CMT': ['KSI-CMT-']
-    }
-    
-    return any(ksi_id.startswith(prefix) for prefix in validator_mappings.get(validator_type, []))
-
-def execute_tenant_validation(ksi_id, validator_type, aws_clients, tenant_config):
-    """Execute validation using tenant's AWS clients"""
-    
-    try:
-        if validator_type == "CNA":
-            return validate_network_architecture(ksi_id, aws_clients)
-        elif validator_type == "SVC":
-            return validate_services(ksi_id, aws_clients)
-        elif validator_type == "IAM":
-            return validate_identity_access(ksi_id, aws_clients)
-        elif validator_type == "MLA":
-            return validate_monitoring_logging(ksi_id, aws_clients)
-        elif validator_type == "CMT":
-            return validate_change_management(ksi_id, aws_clients)
-        else:
-            return {
-                "assertion": False,
-                "assertion_reason": f"❌ Unknown validator type: {validator_type}",
-                "commands_executed": 0,
-                "successful_commands": 0,
-                "failed_commands": 1,
-                "cli_command_details": []
-            }
-    except Exception as e:
-        return {
-            "assertion": False,
-            "assertion_reason": f"❌ Validation error for {ksi_id}: {str(e)}",
-            "commands_executed": 1,
-            "successful_commands": 0,
-            "failed_commands": 1,
-            "cli_command_details": [{
-                "success": False,
-                "error": str(e),
-                "command": f"tenant validation {validator_type}",
-                "note": f"Failed to execute {validator_type} validation checks"
-            }]
-        }
-
-def validate_network_architecture(ksi_id, clients):
-    """CNA - Cloud Native Architecture validation using tenant's AWS account"""
-    results = []
-    
-    # Check subnets in tenant account
-    try:
-        response = clients['ec2'].describe_subnets()
-        subnets = response.get('Subnets', [])
-        availability_zones = set(subnet['AvailabilityZone'] for subnet in subnets)
-        
-        results.append({
-            "success": True,
-            "command": "boto3.ec2.describe_subnets() [tenant account]",
-            "note": "Check network architecture for proper segmentation and high availability design",
-            "data": {
                 "subnet_count": len(subnets),
                 "availability_zones": list(availability_zones),
-                "multi_az": len(availability_zones) > 1
+                "multi_az": len(availability_zones) > 1,
+                "vpc_ids": list(set(subnet.get('VpcId') for subnet in subnets))
             }
-        })
-    except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.ec2.describe_subnets() [tenant account]",
-            "note": "Check network architecture for proper segmentation and high availability design"
-        })
-    
-    # Check availability zones
-    try:
-        response = clients['ec2'].describe_availability_zones()
-        azs = response.get('AvailabilityZones', [])
-        
-        results.append({
-            "success": True,
-            "command": "boto3.ec2.describe_availability_zones() [tenant account]",
-            "note": "Validate multi-AZ deployment capability for rapid recovery architecture",
-            "data": {
-                "available_zones": len(azs),
-                "zones": [az['ZoneName'] for az in azs]
+            
+        elif "describe-availability-zones" in command:
+            ec2 = boto3.client('ec2')
+            response = ec2.describe_availability_zones()
+            zones = response.get('AvailabilityZones', [])
+            return {
+                "zone_count": len(zones),
+                "zones": [zone.get('ZoneName') for zone in zones],
+                "zone_states": [zone.get('State') for zone in zones]
             }
-        })
-    except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.ec2.describe_availability_zones() [tenant account]",
-            "note": "Validate multi-AZ deployment capability for rapid recovery architecture"
-        })
-    
-    # Check Route53 in tenant account
-    try:
-        response = clients['route53'].list_hosted_zones()
-        zones = response.get('HostedZones', [])
-        
-        results.append({
-            "success": True,
-            "command": "boto3.route53.list_hosted_zones() [tenant account]",
-            "note": "Check DNS infrastructure for resilient network architecture",
-            "data": {
-                "hosted_zones": len(zones),
-                "zones": [zone['Name'] for zone in zones[:5]]
+            
+        elif "list-hosted-zones" in command:
+            route53 = boto3.client('route53')
+            response = route53.list_hosted_zones()
+            zones = response.get('HostedZones', [])
+            return {
+                "hosted_zone_count": len(zones),
+                "zone_names": [zone.get('Name') for zone in zones],
+                "private_zones": sum(1 for zone in zones if zone.get('Config', {}).get('PrivateZone'))
             }
-        })
-    except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.route53.list_hosted_zones() [tenant account]",
-            "note": "Check DNS infrastructure for resilient network architecture"
-        })
-    
-    return analyze_results(results, ksi_id)
-
-def validate_services(ksi_id, clients):
-    """SVC - Service validation using tenant's AWS account"""
-    results = []
-    
-    # Check KMS keys in tenant account
-    try:
-        response = clients['kms'].list_keys()
-        keys = response.get('Keys', [])
-        
-        results.append({
-            "success": True,
-            "command": "boto3.kms.list_keys() [tenant account]",
-            "note": "Check KMS keys for automated key management and cryptographic service availability",
-            "data": {
-                "key_count": len(keys)
+            
+        elif "list-keys" in command:
+            kms = boto3.client('kms')
+            response = kms.list_keys()
+            keys = response.get('Keys', [])
+            return {
+                "key_count": len(keys),
+                "key_ids": [key.get('KeyId') for key in keys[:5]]
             }
-        })
-    except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.kms.list_keys() [tenant account]",
-            "note": "Check KMS keys for automated key management and cryptographic service availability"
-        })
-    
-    # Check KMS aliases in tenant account
-    try:
-        response = clients['kms'].list_aliases()
-        aliases = response.get('Aliases', [])
-        
-        results.append({
-            "success": True,
-            "command": "boto3.kms.list_aliases() [tenant account]",
-            "note": "Validate KMS key aliases for proper key lifecycle management and rotation",
-            "data": {
-                "alias_count": len(aliases)
+            
+        elif "list-secrets" in command:
+            secretsmanager = boto3.client('secretsmanager')
+            response = secretsmanager.list_secrets()
+            secrets = response.get('SecretList', [])
+            return {
+                "secret_count": len(secrets),
+                "secret_names": [secret.get('Name') for secret in secrets[:5]]
             }
-        })
-    except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.kms.list_aliases() [tenant account]",
-            "note": "Validate KMS key aliases for proper key lifecycle management and rotation"
-        })
-    
-    # Check Secrets Manager in tenant account
-    try:
-        response = clients['secretsmanager'].list_secrets()
-        secrets = response.get('SecretList', [])
-        
-        results.append({
-            "success": True,
-            "command": "boto3.secretsmanager.list_secrets() [tenant account]",
-            "note": "Check Secrets Manager for automated certificate and credential management",
-            "data": {
-                "secret_count": len(secrets)
+            
+        elif "list-users" in command:
+            iam = boto3.client('iam')
+            response = iam.list_users()
+            users = response.get('Users', [])
+            return {
+                "user_count": len(users),
+                "user_names": [user.get('UserName') for user in users[:10]]
             }
-        })
-    except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.secretsmanager.list_secrets() [tenant account]",
-            "note": "Check Secrets Manager for automated certificate and credential management"
-        })
-    
-    return analyze_results(results, ksi_id)
-
-def validate_identity_access(ksi_id, clients):
-    """IAM - Identity and Access Management validation using tenant's AWS account"""
-    results = []
-    
-    # Check IAM users in tenant account
-    try:
-        response = clients['iam'].list_users()
-        users = response.get('Users', [])
-        
-        results.append({
-            "success": True,
-            "command": "boto3.iam.list_users() [tenant account]",
-            "note": "Check IAM users for proper identity management and MFA enforcement",
-            "data": {
-                "user_count": len(users)
-            }
-        })
-    except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.iam.list_users() [tenant account]",
-            "note": "Check IAM users for proper identity management and MFA enforcement"
-        })
-    
-    # Check roles in tenant account
-    try:
-        response = clients['iam'].list_roles()
-        roles = response.get('Roles', [])
-        
-        results.append({
-            "success": True,
-            "command": "boto3.iam.list_roles() [tenant account]",
-            "note": "Check IAM roles for proper access control and least privilege",
-            "data": {
-                "role_count": len(roles)
-            }
-        })
-    except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.iam.list_roles() [tenant account]",
-            "note": "Check IAM roles for proper access control and least privilege"
-        })
-    
-    # Check account summary for tenant account
-    try:
-        response = clients['iam'].get_account_summary()
-        summary = response.get('SummaryMap', {})
-        
-        results.append({
-            "success": True,
-            "command": "boto3.iam.get_account_summary() [tenant account]",
-            "note": "Check account security summary for identity management overview",
-            "data": {
-                "users": summary.get('Users', 0),
-                "roles": summary.get('Roles', 0),
-                "policies": summary.get('Policies', 0)
-            }
-        })
-    except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.iam.get_account_summary() [tenant account]",
-            "note": "Check account security summary for identity management overview"
-        })
-    
-    return analyze_results(results, ksi_id)
-
-def validate_monitoring_logging(ksi_id, clients):
-    """MLA - Monitoring, Logging, and Alerting validation using tenant's AWS account"""
-    results = []
-    
-    # Check CloudTrail in tenant account
-    try:
-        response = clients['cloudtrail'].describe_trails()
-        trails = response.get('trailList', [])
-        
-        results.append({
-            "success": True,
-            "command": "boto3.cloudtrail.describe_trails() [tenant account]",
-            "note": "Validate CloudTrail for comprehensive logging and monitoring",
-            "data": {
+            
+        elif "describe-trails" in command:
+            cloudtrail = boto3.client('cloudtrail')
+            response = cloudtrail.describe_trails()
+            trails = response.get('trailList', [])
+            return {
                 "trail_count": len(trails),
-                "multi_region_trails": len([t for t in trails if t.get('IsMultiRegionTrail', False)])
+                "trail_names": [trail.get('Name') for trail in trails],
+                "multi_region_trails": sum(1 for trail in trails if trail.get('IsMultiRegionTrail'))
             }
-        })
-    except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.cloudtrail.describe_trails() [tenant account]",
-            "note": "Validate CloudTrail for comprehensive logging and monitoring"
-        })
-    
-    # Check CloudWatch alarms in tenant account
-    try:
-        response = clients['cloudwatch'].describe_alarms()
-        alarms = response.get('MetricAlarms', [])
-        
-        results.append({
-            "success": True,
-            "command": "boto3.cloudwatch.describe_alarms() [tenant account]",
-            "note": "Check CloudWatch alarms for automated monitoring and alerting",
-            "data": {
-                "alarm_count": len(alarms),
-                "ok_alarms": len([a for a in alarms if a['StateValue'] == 'OK'])
+            
+        elif "describe-log-groups" in command:
+            logs = boto3.client('logs')
+            response = logs.describe_log_groups()
+            log_groups = response.get('logGroups', [])
+            return {
+                "log_group_count": len(log_groups),
+                "log_group_names": [lg.get('logGroupName') for lg in log_groups[:10]]
             }
-        })
+            
+        else:
+            logger.warning(f"Unknown command: {command}")
+            return {"error": f"Command not implemented: {command}"}
+            
     except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.cloudwatch.describe_alarms() [tenant account]",
-            "note": "Check CloudWatch alarms for automated monitoring and alerting"
-        })
-    
-    # Check SNS topics in tenant account
-    try:
-        response = clients['sns'].list_topics()
-        topics = response.get('Topics', [])
-        
-        results.append({
-            "success": True,
-            "command": "boto3.sns.list_topics() [tenant account]",
-            "note": "Validate SNS topics for alert notification workflows",
-            "data": {
-                "topic_count": len(topics)
-            }
-        })
-    except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.sns.list_topics() [tenant account]",
-            "note": "Validate SNS topics for alert notification workflows"
-        })
-    
-    return analyze_results(results, ksi_id)
+        logger.error(f"Error executing {command}: {str(e)}")
+        raise Exception(f"AWS command failed: {str(e)}")
 
-def validate_change_management(ksi_id, clients):
-    """CMT - Change Management and integrity validation using tenant's AWS account"""
-    results = []
-    
-    # Check CloudTrail integrity in tenant account
+def execute_evidence_check(ksi_id: str, note: str) -> Dict:
+    """Handle evidence checking for KSIs that require document validation"""
     try:
-        response = clients['cloudtrail'].describe_trails()
-        trails = response.get('trailList', [])
-        integrity_trails = [t for t in trails if t.get('LogFileValidationEnabled', False)]
+        evidence_path = ""
+        if "evidence_v2/" in note:
+            start = note.find("evidence_v2/")
+            end = note.find(" ", start)
+            if end == -1:
+                end = len(note)
+            evidence_path = note[start:end]
         
-        results.append({
-            "success": True,
-            "command": "boto3.cloudtrail.describe_trails() [tenant account]",
-            "note": "Check CloudTrail log file validation for audit trail integrity and tamper-evident logging",
-            "data": {
-                "total_trails": len(trails),
-                "integrity_enabled": len(integrity_trails)
-            }
-        })
+        return {
+            "evidence_check": True,
+            "ksi_id": ksi_id,
+            "evidence_path": evidence_path,
+            "note": note,
+            "documents_found": []  # Would integrate with actual evidence system
+        }
     except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.cloudtrail.describe_trails() [tenant account]",
-            "note": "Check CloudTrail log file validation for audit trail integrity and tamper-evident logging"
-        })
-    
-    # Check AWS Config in tenant account
-    try:
-        response = clients['config'].describe_configuration_recorders()
-        recorders = response.get('ConfigurationRecorders', [])
-        
-        results.append({
-            "success": True,
-            "command": "boto3.config.describe_configuration_recorders() [tenant account]",
-            "note": "Validate AWS Config for configuration change integrity tracking and compliance monitoring",
-            "data": {
-                "recorder_count": len(recorders)
-            }
-        })
-    except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.config.describe_configuration_recorders() [tenant account]",
-            "note": "Validate AWS Config for configuration change integrity tracking and compliance monitoring"
-        })
-    
-    # Check CloudFormation stacks in tenant account
-    try:
-        response = clients['cloudformation'].list_stacks(
-            StackStatusFilter=[
-                'CREATE_COMPLETE',
-                'UPDATE_COMPLETE', 
-                'UPDATE_ROLLBACK_COMPLETE'
-            ]
-        )
-        stacks = response.get('StackSummaries', [])
-        
-        results.append({
-            "success": True,
-            "command": "boto3.cloudformation.list_stacks() [tenant account]",
-            "note": "Check CloudFormation stacks for Infrastructure as Code deployment tracking",
-            "data": {
-                "stack_count": len(stacks)
-            }
-        })
-    except Exception as e:
-        results.append({
-            "success": False,
-            "error": str(e),
-            "command": "boto3.cloudformation.list_stacks() [tenant account]",
-            "note": "Check CloudFormation stacks for Infrastructure as Code deployment tracking"
-        })
-    
-    return analyze_results(results, ksi_id)
+        logger.error(f"Error in evidence check for {ksi_id}: {str(e)}")
+        return {
+            "evidence_check": False,
+            "ksi_id": ksi_id,
+            "error": str(e)
+        }
 
-def analyze_results(results, ksi_id):
-    """Analyze validation results and return summary"""
-    successful_commands = sum(1 for r in results if r["success"])
-    failed_commands = len(results) - successful_commands
+def analyze_ksi_results(ksi_definition: Dict, command_results: List[Dict]) -> Dict:
+    """Analyze CLI command results to determine KSI assertion"""
+    total_commands = len(command_results)
+    successful_commands = sum(1 for result in command_results if result.get('success', False))
+    failed_commands = total_commands - successful_commands
     
-    if successful_commands > 0:
-        assertion = True
-        assertion_reason = f"✅ {successful_commands}/{len(results)} AWS validation checks passed for {ksi_id} [tenant account]"
+    ksi_id = ksi_definition.get('ksi_id', 'Unknown')
+    category = ksi_definition.get('category', 'Unknown')
+    
+    assertion = successful_commands > 0 and failed_commands == 0
+    
+    if assertion:
+        assertion_reason = f"✅ {successful_commands}/{total_commands} AWS validation checks passed for {category} compliance"
     else:
-        assertion = False  
-        assertion_reason = f"❌ All AWS validation checks failed for {ksi_id} [tenant account] - check permissions"
+        assertion_reason = f"❌ {failed_commands}/{total_commands} AWS validation checks failed for {category} compliance"
     
     return {
-        "assertion": assertion,
-        "assertion_reason": assertion_reason,
-        "commands_executed": len(results),
-        "successful_commands": successful_commands,
-        "failed_commands": failed_commands,
-        "cli_command_details": results
+        'assertion': assertion,
+        'assertion_reason': assertion_reason,
+        'commands_executed': total_commands,
+        'successful_commands': successful_commands,
+        'failed_commands': failed_commands
     }
 
-def create_error_response(error_msg, validator_type, execution_id, tenant_id):
-    """Create standardized error response"""
+def save_ksi_result(execution_id: str, tenant_id: str, result: Dict) -> None:
+    """Save KSI validation result to execution history with individual validator record"""
+    table = dynamodb.Table(KSI_EXECUTION_HISTORY_TABLE)
+    
+    try:
+        # Save individual validator result with execution_id#ksi_id format (CRITICAL!)
+        record = {
+            'execution_id': f"{execution_id}#{result['ksi_id']}",  # Individual validator record
+            'timestamp': result['timestamp'],
+            'tenant_id': tenant_id,
+            'ksi_id': result['ksi_id'],
+            'validator_type': result['validator_type'],
+            'validation_result': result,
+            'ttl': int((datetime.now(timezone.utc).timestamp() + (90 * 24 * 60 * 60)))  # 90 days TTL
+        }
+        
+        table.put_item(Item=record)
+        logger.info(f"✅ Saved individual KSI result: {execution_id}#{result['ksi_id']}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error saving KSI result: {str(e)}")
+        # Don't raise - continue processing other KSIs
+
+def generate_summary(results: List[Dict]) -> Dict:
+    """Generate validation summary statistics"""
+    total = len(results)
+    passed = sum(1 for r in results if r.get('assertion', False))
+    failed = total - passed
+    
     return {
-        'statusCode': 500,
-        'body': json.dumps({
-            'error': error_msg,
-            'validator_type': validator_type,
-            'execution_id': execution_id,
-            'tenant_id': tenant_id
-        })
+        'total_ksis': total,
+        'passed': passed,
+        'failed': failed,
+        'pass_rate': round((passed / total * 100) if total > 0 else 0, 2),
+        'validator_type': VALIDATOR_TYPE
     }

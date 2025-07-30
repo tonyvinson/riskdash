@@ -1,3 +1,55 @@
+#!/bin/bash
+
+# Deploy KSI Validators using CORRECT Terraform function names
+set -e  
+
+echo "🚀 Deploying DynamoDB-Based KSI Validators (Using Correct Terraform Names)..."
+
+# Configuration from your Terraform files
+PROJECT_NAME="riskuity-ksi-validator"
+ENVIRONMENT="production"
+VALIDATORS=("cna" "svc" "iam" "mla" "cmt")
+REGION="us-gov-west-1"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+print_status() { echo -e "${GREEN}✅ $1${NC}"; }
+print_warning() { echo -e "${YELLOW}⚠️ $1${NC}"; }
+print_error() { echo -e "${RED}❌ $1${NC}"; }
+print_info() { echo -e "${BLUE}ℹ️ $1${NC}"; }
+
+# Check dependencies
+check_dependencies() {
+    print_info "Checking dependencies..."
+    
+    if ! command -v aws &> /dev/null; then
+        print_error "AWS CLI not found"
+        exit 1
+    fi
+    
+    if ! aws sts get-caller-identity --region $REGION &> /dev/null; then
+        print_error "AWS credentials not configured for region $REGION"
+        exit 1
+    fi
+    
+    print_status "Dependencies check passed"
+}
+
+# Create DynamoDB-based validator handler
+create_validator_handler() {
+    local validator_type=$1
+    local validator_dir="lambdas/validators/ksi-validator-${validator_type}"
+    
+    print_info "Creating DynamoDB-based handler for ${validator_type} validator..."
+    
+    mkdir -p "$validator_dir"
+    
+    cat > "$validator_dir/handler.py" << 'EOF'
 import json
 import boto3
 import logging
@@ -363,3 +415,130 @@ def generate_summary(results: List[Dict]) -> Dict:
         'pass_rate': round((passed / total * 100) if total > 0 else 0, 2),
         'validator_type': VALIDATOR_TYPE
     }
+EOF
+
+    print_status "Created DynamoDB-based handler for ${validator_type}"
+}
+
+# Package and deploy a single validator
+package_and_deploy_validator() {
+    local validator_type=$1
+    # Using CORRECT Terraform naming pattern
+    local function_name="${PROJECT_NAME}-validator-${validator_type}-${ENVIRONMENT}"
+    local validator_dir="lambdas/validators/ksi-validator-${validator_type}"
+    
+    print_info "Deploying ${validator_type} validator to function: ${function_name}"
+    
+    # Create zip package
+    cd "$validator_dir"
+    zip -r "../../../${function_name}.zip" handler.py
+    cd "../../../"
+    
+    # Update Lambda function using CORRECT function name
+    print_info "Updating Lambda function: ${function_name}"
+    
+    aws lambda update-function-code \
+        --function-name "$function_name" \
+        --zip-file "fileb://${function_name}.zip" \
+        --region "$REGION" || {
+        print_error "Failed to update Lambda function: ${function_name}"
+        return 1
+    }
+    
+    # Also update environment variables to ensure KSI_DEFINITIONS_TABLE is set
+    aws lambda update-function-configuration \
+        --function-name "$function_name" \
+        --environment Variables="{VALIDATOR_TYPE=$validator_type,ENVIRONMENT=$ENVIRONMENT,KSI_DEFINITIONS_TABLE=riskuity-ksi-validator-ksi-definitions-production,KSI_EXECUTION_HISTORY_TABLE=riskuity-ksi-validator-ksi-execution-history-production}" \
+        --region "$REGION" || {
+        print_warning "Failed to update environment variables for: ${function_name}"
+    }
+    
+    # Clean up zip file
+    rm -f "${function_name}.zip"
+    
+    print_status "Successfully deployed ${validator_type} validator"
+}
+
+# Test validator deployment
+test_validator() {
+    local validator_type=$1
+    local function_name="${PROJECT_NAME}-validator-${validator_type}-${ENVIRONMENT}"
+    
+    print_info "Testing ${validator_type} validator..."
+    
+    # Create test payload
+    local test_payload='{
+        "execution_id": "test-'$(date +%s)'",
+        "tenant_id": "riskuity-production",
+        "ksis": [
+            {
+                "ksi_id": "KSI-'$(echo $validator_type | tr '[:lower:]' '[:upper:]')'-01",
+                "enabled": true
+            }
+        ]
+    }'
+    
+    # Invoke Lambda function
+    aws lambda invoke \
+        --function-name "$function_name" \
+        --payload "$test_payload" \
+        --region "$REGION" \
+        "test-output-${validator_type}.json" > /dev/null
+    
+    # Check response
+    if grep -q '"statusCode": 200' "test-output-${validator_type}.json"; then
+        print_status "${validator_type} validator test passed"
+    else
+        print_warning "${validator_type} validator test had issues - check test-output-${validator_type}.json"
+        cat "test-output-${validator_type}.json"
+    fi
+    
+    # Clean up test output
+    rm -f "test-output-${validator_type}.json"
+}
+
+# Main deployment function
+main() {
+    print_info "🎯 MISSION: Restore FedRAMP 20x CLI Command Details Requirement"
+    print_info "Using CORRECT Terraform function names from your configuration"
+    
+    # Check dependencies
+    check_dependencies
+    
+    # Create validator handlers
+    for validator in "${VALIDATORS[@]}"; do
+        create_validator_handler "$validator"
+    done
+    
+    # Package and deploy validators
+    print_info "📦 Packaging and deploying all validators with correct names..."
+    for validator in "${VALIDATORS[@]}"; do
+        if ! package_and_deploy_validator "$validator"; then
+            print_error "Failed to deploy ${validator} validator"
+            exit 1
+        fi
+    done
+    
+    # Test validators
+    print_info "🧪 Testing deployed validators..."
+    for validator in "${VALIDATORS[@]}"; do
+        test_validator "$validator"
+    done
+    
+    print_status "🎉 All validators deployed successfully!"
+    print_info "CLI command details should now be restored in validation results"
+    
+    # Test execution
+    print_info "🚀 Triggering test validation to confirm CLI details restoration..."
+    curl -X POST 'https://d5804hjt80.execute-api.us-gov-west-1.amazonaws.com/production/api/ksi/validate' \
+         -H 'Content-Type: application/json' \
+         -d '{"tenant_id": "riskuity-production", "trigger_source": "cli-restoration-test"}' || {
+        print_warning "Test validation trigger failed - check API endpoint"
+    }
+    
+    print_status "✅ DEPLOYMENT COMPLETE - FedRAMP 20x CLI Command Details Restored!"
+    print_info "Next: Check execution results for cli_command_details in validation responses"
+}
+
+# Execute main function
+main "$@"

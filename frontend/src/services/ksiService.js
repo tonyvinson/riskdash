@@ -2,7 +2,25 @@ import axios from 'axios';
 
 // Create API client
 const apiClient = axios.create({
+  baseURL: process.env.NODE_ENV === 'production' ? process.env.REACT_APP_API_URL : '',
   timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// Add request/response interceptors for debugging
+apiClient.interceptors.request.use(request => {
+  console.log('🌐 API Request:', request.method?.toUpperCase(), request.url);
+  return request;
+});
+
+apiClient.interceptors.response.use(response => {
+  console.log('🌐 API Response:', response.status, response.config.url);
+  return response;
+}, error => {
+  console.error('🌐 API Error:', error.response?.status, error.config?.url, error.message);
+  return Promise.reject(error);
 });
 
 // Helper function for validator icons
@@ -17,192 +35,144 @@ const getValidatorIcon = (validator) => {
   return icons[validator] || '🔧';
 };
 
-// ✅ FIXED: Transform with proper tenant filtering and new data priority
+// ✅ COMPLETELY FIXED: Transform function for YOUR ACTUAL DATA STRUCTURE
 const transformKsiResultsToExecutions = (rawData, requestedTenant = null) => {
+  console.log('🔄 Transforming KSI results to executions for tenant:', requestedTenant);
+  console.log('🔄 Raw data received:', rawData);
+  
   const executions = rawData.data?.executions || [];
+  console.log('📊 Raw executions found:', executions.length);
   
-  console.log('🔧 FIXED Data transformation for tenant:', requestedTenant);
-  console.log('📊 Raw executions received:', executions.length);
+  if (executions.length === 0) {
+    console.log('🔄 No executions found in API response');
+    return {
+      success: true,
+      data: {
+        executions: [],
+        count: 0,
+        tenant_id: requestedTenant
+      }
+    };
+  }
   
-  // ✅ STRICT TENANT FILTERING - only show data for requested tenant
+  // ✅ TENANT FILTERING - only show data for requested tenant
   let filteredExecutions = executions;
   if (requestedTenant && requestedTenant !== 'all') {
     filteredExecutions = executions.filter(ex => {
-      // STRICT MATCH - only exact tenant matches
       const matches = ex.tenant_id === requestedTenant;
-      
       if (!matches) {
-        console.log(`🚫 Filtering out execution ${ex.execution_id?.substring(0, 8)}... from tenant "${ex.tenant_id}" (requested: "${requestedTenant}")`);
+        console.log(`🚫 Filtering out execution from tenant "${ex.tenant_id}" (requested: "${requestedTenant}")`);
       }
-      
       return matches;
     });
-    console.log(`🎯 STRICT FILTER: Requested "${requestedTenant}", kept ${filteredExecutions.length} of ${executions.length} executions`);
+    console.log(`🎯 Tenant filtering: kept ${filteredExecutions.length} of ${executions.length} executions`);
   }
   
-  // Separate individual KSI results from execution summaries
-  const ksiResults = filteredExecutions.filter(ex => ex.execution_id?.includes('#'));
-  const executionSummaries = filteredExecutions.filter(ex => !ex.execution_id?.includes('#') && ex.status);
+  // ✅ YOUR DATA IS ALREADY IN EXECUTION SUMMARY FORMAT - just return it!
+  const transformedExecutions = filteredExecutions.map(execution => ({
+    execution_id: execution.execution_id,
+    tenant_id: execution.tenant_id,
+    status: execution.status || 'UNKNOWN',
+    timestamp: execution.timestamp || execution.completed_at,
+    validators_completed: execution.validators_completed || [],
+    validators_requested: execution.validators_requested || [],
+    total_ksis_validated: execution.total_ksis_validated || 0,
+    trigger_source: execution.trigger_source || 'unknown',
+    validation_results: execution.validation_results || [],
+    // Add computed fields for UI
+    started_at: execution.timestamp || execution.completed_at,
+    completed_at: execution.completed_at || execution.timestamp,
+    duration: 'N/A', // Could calculate if start/end times available
+    success_rate: execution.validators_completed ? 
+      (execution.validators_completed.length / (execution.validators_requested?.length || 5)) * 100 : 0
+  }));
   
-  console.log('🔧 After tenant filtering:');
-  console.log('- Individual KSI results:', ksiResults.length);
-  console.log('- Execution summaries:', executionSummaries.length);
-  
-  // ✅ COMBINE BOTH TYPES - newer data first, regardless of format
-  let allExecutions = [];
-  
-  // Convert KSI results to synthetic executions
-  if (ksiResults.length > 0) {
-    console.log('🔧 Converting KSI results to execution summaries');
-    
-    // Group by base execution ID
-    const grouped = {};
-    ksiResults.forEach(ksi => {
-      const baseId = ksi.execution_id.split('#')[0];
-      if (!grouped[baseId]) {
-        grouped[baseId] = {
-          execution_id: baseId,
-          tenant_id: requestedTenant || ksi.tenant_id,
-          status: 'COMPLETED',
-          timestamp: ksi.timestamp,
-          validators_completed: [],
-          validators_requested: [],
-          total_ksis_validated: 0,
-          trigger_source: 'api',
-          validation_results: [],
-          ksi_results: []
-        };
-      }
-      
-      // Add validator to completed list
-      const validator = ksi.validator_type.toLowerCase();
-      if (!grouped[baseId].validators_completed.includes(validator)) {
-        grouped[baseId].validators_completed.push(validator);
-        grouped[baseId].validators_requested.push(validator);
-      }
-      
-      // Add to total KSIs validated
-      grouped[baseId].total_ksis_validated++;
-      
-      // Store the KSI result for detailed view
-      grouped[baseId].ksi_results.push(ksi);
-      
-      // Create validation result format for compatibility
-      grouped[baseId].validation_results.push({
-        validator: validator,
-        status: ksi.validation_result?.assertion ? 'SUCCESS' : 'FAILED',
-        result: {
-          statusCode: ksi.validation_result?.assertion ? 200 : 500,
-          body: JSON.stringify({
-            ...ksi.validation_result,
-            validator_type: ksi.validator_type,
-            execution_id: baseId,
-            tenant_id: grouped[baseId].tenant_id
-          })
-        },
-        function_name: `riskuity-ksi-validator-validator-${validator}-production`
-      });
-      
-      // Use most recent timestamp
-      if (ksi.timestamp > grouped[baseId].timestamp) {
-        grouped[baseId].timestamp = ksi.timestamp;
-      }
-    });
-    
-    const syntheticExecutions = Object.values(grouped);
-    console.log('✅ Created synthetic executions:', syntheticExecutions.length);
-    allExecutions.push(...syntheticExecutions);
-  }
-  
-  // Add execution summaries (but only if they match the tenant)
-  if (executionSummaries.length > 0) {
-    console.log('✅ Adding execution summaries:', executionSummaries.length);
-    allExecutions.push(...executionSummaries);
-  }
-  
-  // ✅ SORT BY TIMESTAMP - NEWEST FIRST
-  allExecutions.sort((a, b) => {
-    const timestampA = new Date(a.timestamp || a.completed_at || 0);
-    const timestampB = new Date(b.timestamp || b.completed_at || 0);
-    return timestampB - timestampA; // Newest first
+  // Sort by timestamp (newest first)
+  transformedExecutions.sort((a, b) => {
+    const timeA = new Date(a.timestamp || 0);
+    const timeB = new Date(b.timestamp || 0);
+    return timeB - timeA;
   });
   
-  console.log('✅ Final execution list (newest first):', allExecutions.length);
-  allExecutions.forEach((ex, i) => {
-    console.log(`  ${i + 1}. ${ex.execution_id?.substring(0, 8)}... (${ex.timestamp || ex.completed_at})`);
-  });
+  console.log(`🔄 Transformation complete: ${transformedExecutions.length} executions for tenant ${requestedTenant}`);
   
   return {
     success: true,
     data: {
-      executions: allExecutions,
-      count: allExecutions.length
+      executions: transformedExecutions,
+      count: transformedExecutions.length,
+      tenant_id: requestedTenant
     }
   };
 };
 
-// Calculate compliance overview from execution data
-const calculateComplianceOverview = (executionData) => {
-  console.log('📊 Calculating compliance for execution:', executionData.execution_id);
-  
-  // Use validators_completed for overall status (orchestrator level)
-  const completedValidators = executionData.validators_completed || [];
-  const totalValidators = 5; // Always 5: cna, svc, iam, mla, cmt
-  
-  // Calculate overall compliance
-  const overallPassRate = Math.round((completedValidators.length / totalValidators) * 100);
-  
-  // Create category results
-  const categoryResults = {};
-  const validatorNames = ['cna', 'svc', 'iam', 'mla', 'cmt'];
-  
-  validatorNames.forEach(validator => {
-    const isCompleted = completedValidators.includes(validator);
-    categoryResults[validator] = {
-      validator: validator,
-      status: isCompleted ? 'COMPLETED' : 'PENDING',
-      passed: isCompleted,
-      icon: getValidatorIcon(validator)
+// ✅ NEW: Calculate compliance overview from CLI details (real data)
+const calculateComplianceFromCLIDetails = (cliDetails) => {
+  if (!cliDetails || cliDetails.length === 0) {
+    return {
+      totalValidators: 5,
+      completedValidators: 0,
+      successfulValidators: 0,
+      overallCompliance: 0,
+      validatorsWithCLI: 0
     };
-  });
-  
-  // Parse AWS resources from validation results or KSI results
-  let awsResources = {
-    total: executionData.total_ksis_validated || 0,
-    subnets: 0, hostedZones: 0, kmsKeys: 0, secretsManagerSecrets: 0,
-    iamUsers: 0, iamRoles: 0, iamPolicies: 0, cloudtrailTrails: 0,
-    cloudwatchAlarms: 0, snsTopics: 0, cloudformationStacks: 0
-  };
-  
-  console.log('📊 Calculated compliance:', {
-    overallPassRate,
-    completedValidators: completedValidators.length,
-    totalValidators,
-    awsResources
-  });
-  
+  }
+
+  const validatorsWithCLI = cliDetails.length;
+  const successfulValidators = cliDetails.filter(detail => {
+    return detail.assertion === true || 
+           (detail.cli_command_details && detail.cli_command_details.some(cmd => cmd.success === true));
+  }).length;
+
+  const overallCompliance = Math.round((validatorsWithCLI / 5) * 100);
+
   return {
-    totalValidators,
-    passedValidators: completedValidators.length,
-    failedValidators: totalValidators - completedValidators.length,
-    overallPassRate,
-    categoryResults,
-    awsResources
+    totalValidators: 5,
+    completedValidators: validatorsWithCLI,
+    successfulValidators,
+    overallCompliance,
+    validatorsWithCLI,
+    pendingValidators: 5 - validatorsWithCLI
   };
 };
 
-// Parse validation result with enhanced error handling
-const parseValidationResult = (result) => {
-  if (!result) return null;
+// Calculate compliance overview from validation results
+const calculateComplianceOverview = (validationResults) => {
+  if (!validationResults || validationResults.length === 0) {
+    return {
+      totalKsis: 0,
+      passedKsis: 0,
+      failedKsis: 0,
+      compliancePercentage: 0,
+      lastUpdated: new Date().toISOString()
+    };
+  }
   
+  const totalKsis = validationResults.length;
+  const passedKsis = validationResults.filter(result => 
+    result.status === 'SUCCESS' || result.assertion === true
+  ).length;
+  const failedKsis = totalKsis - passedKsis;
+  const compliancePercentage = totalKsis > 0 ? (passedKsis / totalKsis) * 100 : 0;
+  
+  return {
+    totalKsis,
+    passedKsis,
+    failedKsis,
+    compliancePercentage: Math.round(compliancePercentage),
+    lastUpdated: new Date().toISOString()
+  };
+};
+
+// Parse individual validation result
+const parseValidationResult = (result) => {
   try {
-    // Handle different result formats
-    let parsedResult;
+    let parsedResult = result;
     
-    if (result.result?.body) {
-      // Standard validation result format
-      parsedResult = typeof result.result.body === 'string' 
-        ? JSON.parse(result.result.body) 
+    // Handle nested result structure
+    if (result.result && result.result.body) {
+      parsedResult = typeof result.result.body === 'string' ? 
+        JSON.parse(result.result.body) 
         : result.result.body;
     } else if (result.validation_result) {
       // KSI result format
@@ -242,11 +212,14 @@ const ksiService = {
   // Calculate compliance overview
   calculateComplianceOverview,
   
+  // ✅ NEW: Calculate compliance from CLI details (real data)
+  calculateComplianceFromCLIDetails,
+  
   // Parse validation results
   parseValidationResult,
 
   // Trigger KSI validation for a tenant
-  triggerValidation: async (tenantId = 'default', triggerSource = 'manual', executionId = null) => {
+  triggerValidation: async (tenantId = 'riskuity-production', triggerSource = 'manual', executionId = null) => {
     try {
       const payload = {
         tenant_id: tenantId,
@@ -286,8 +259,10 @@ const ksiService = {
 
   // Get available tenants with metadata
   getTenants: async () => {
+    console.log('🏢 Fetching tenants from API...');
     try {
       const response = await apiClient.get('/api/ksi/tenants');
+      console.log('🏢 Tenants API response:', response.data);
       return response.data;
     } catch (error) {
       console.warn('Failed to load tenants:', error.message);
@@ -295,19 +270,19 @@ const ksiService = {
       return {
         success: true,
         tenants: [
-          { tenant_id: 'riskuity-production', display_name: 'Riskuity Production', ksi_count: 5 },
-          { tenant_id: 'real-test', display_name: 'Real Test', ksi_count: 5 }
+          { tenant_id: 'riskuity-production', tenant_name: 'Riskuity Production', ksi_count: 5 },
+          { tenant_id: 'riskuity-internal', tenant_name: 'Riskuity Internal', ksi_count: 5 }
         ]
       };
     }
   },
 
-  // ✅ FIXED: Get KSI execution history with STRICT tenant filtering
-  getExecutionHistory: async (tenantId = 'all', limit = 10, startKey = null) => {
+  // Get KSI execution history with proper tenant filtering
+  getExecutionHistory: async (tenantId = 'riskuity-production', limit = 20, startKey = null) => {
     try {
       const params = new URLSearchParams();
       
-      // ✅ ALWAYS pass tenant_id for proper filtering
+      // Always pass tenant_id for proper filtering
       if (tenantId && tenantId !== 'all') {
         params.append('tenant_id', tenantId);
       }
@@ -323,7 +298,7 @@ const ksiService = {
       
       const response = await apiClient.get(url);
       
-      // ✅ FIXED: Pass the requested tenant to transformation for proper filtering
+      // Transform the response data
       const transformedData = transformKsiResultsToExecutions(response.data, tenantId);
       
       console.log('📊 Transformed execution history for tenant:', tenantId, transformedData);
@@ -354,6 +329,95 @@ const ksiService = {
       
     } catch (error) {
       throw new Error(`Failed to fetch validation results: ${error.message}`);
+    }
+  },
+
+  // ✅ NEW: Get individual validator record with CLI command details
+  getValidatorDetails: async (executionId, ksiId) => {
+    try {
+      // ✅ FIXED: Clean execution ID first (remove any existing #KSI- suffix)
+      const cleanExecutionId = executionId.split('#')[0];
+      const validatorRecordId = `${cleanExecutionId}#${ksiId}`;
+      
+      const params = new URLSearchParams();
+      params.append('execution_id', validatorRecordId);
+      
+      const url = `/api/ksi/results?${params.toString()}`;
+      console.log('🔍 Fetching validator CLI details:', url);
+      console.log('🔍 Clean execution ID:', cleanExecutionId, '+ KSI ID:', ksiId, '= Record ID:', validatorRecordId);
+      
+      const response = await apiClient.get(url);
+      
+      if (response.data.success && response.data.data.validation_results.length > 0) {
+        const validatorRecord = response.data.data.validation_results[0];
+        
+        // Extract CLI command details from the correct path
+        const cliDetails = validatorRecord.validation_result?.cli_command_details || [];
+        
+        console.log('✅ Found CLI command details:', cliDetails.length, 'commands');
+        
+        return {
+          success: true,
+          data: {
+            validator_record: validatorRecord,
+            cli_command_details: cliDetails,
+            ksi_id: validatorRecord.ksi_id,
+            validator_type: validatorRecord.validator_type,
+            assertion: validatorRecord.validation_result?.assertion,
+            assertion_reason: validatorRecord.validation_result?.assertion_reason
+          }
+        };
+      } else {
+        throw new Error('Validator record not found');
+      }
+      
+    } catch (error) {
+      console.error('❌ Failed to fetch validator details:', error);
+      throw new Error(`Failed to fetch validator CLI details: ${error.message}`);
+    }
+  },
+
+  // ✅ NEW: Get all validator details for an execution with CLI commands
+  getAllValidatorDetails: async (executionId, validators = ['cna', 'svc', 'iam', 'mla', 'cmt']) => {
+    try {
+      console.log('🔍 Fetching all validator details for execution:', executionId);
+      
+      const validatorPromises = validators.map(async (validator) => {
+        try {
+          const ksiId = `KSI-${validator.toUpperCase()}-01`;
+          const details = await ksiService.getValidatorDetails(executionId, ksiId);
+          
+          return {
+            validator: validator,
+            ksi_id: ksiId,
+            ...details.data
+          };
+        } catch (error) {
+          console.warn(`Failed to fetch details for ${validator}:`, error.message);
+          return {
+            validator: validator,
+            ksi_id: `KSI-${validator.toUpperCase()}-01`,
+            error: error.message,
+            cli_command_details: []
+          };
+        }
+      });
+      
+      const allDetails = await Promise.all(validatorPromises);
+      
+      // ✅ Filter out validators with errors for cleaner results
+      const successfulDetails = allDetails.filter(detail => !detail.error && detail.cli_command_details?.length > 0);
+      
+      console.log('✅ Fetched details for', allDetails.length, 'validators,', successfulDetails.length, 'successful');
+      
+      return {
+        success: true,
+        data: successfulDetails
+      };
+      
+    } catch (error) {
+      console.error('❌ Failed to fetch all validator details:', error);
+      throw new Error(`Failed to fetch all validator details: ${error.message}`);
     }
   }
 };

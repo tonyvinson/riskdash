@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ChevronRight, ChevronLeft, CheckCircle, AlertCircle, Copy, ExternalLink } from 'lucide-react';
-import { ksiService } from '../../services/ksiService';
+import ksiService from '../../services/ksiService';
 
 const TenantOnboarding = ({ onComplete }) => {
   const [currentStep, setCurrentStep] = useState(1);

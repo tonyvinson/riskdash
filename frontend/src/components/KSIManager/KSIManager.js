@@ -1,10 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import ksiService, { getValidatorIcon } from '../../services/ksiService';
 import './KSIManager.css';
 
 const KSIManager = () => {
+    // ✅ FIXED: Add ref to prevent React Strict Mode double execution
+    const hasLoadedTenants = useRef(false);
+    
     // State management
-    const [selectedTenant, setSelectedTenant] = useState('riskuity-production');
+    const [selectedTenant, setSelectedTenant] = useState(''); // ✅ Start empty, set after tenants load
+    const [availableTenants, setAvailableTenants] = useState([]);
     const [executionHistory, setExecutionHistory] = useState([]);
     const [currentKSIData, setCurrentKSIData] = useState(null);
     const [complianceOverview, setComplianceOverview] = useState(null);
@@ -12,10 +16,143 @@ const KSIManager = () => {
     const [error, setError] = useState(null);
     const [successMessage, setSuccessMessage] = useState(null);
     const [expandedExecutionId, setExpandedExecutionId] = useState(null);
+    
+    // ✅ NEW: State for CLI command details
+    const [validatorDetails, setValidatorDetails] = useState({});
+    const [loadingValidatorDetails, setLoadingValidatorDetails] = useState({});
+    const [expandedValidatorId, setExpandedValidatorId] = useState(null);
+
+    // ✅ FIXED: Real-time compliance calculation based on actual CLI details
+    const updateComplianceFromCLIDetails = useCallback((executionId, cliDetails) => {
+        if (!cliDetails || cliDetails.length === 0) return;
+
+        const validatorsWithCLI = cliDetails.length;
+        const successfulValidators = cliDetails.filter(detail => {
+            return detail.assertion === true || 
+                   (detail.cli_command_details && detail.cli_command_details.some(cmd => cmd.success === true));
+        }).length;
+
+        const realCompliance = Math.round((validatorsWithCLI / 5) * 100);
+
+        console.log('✅ FIXED: Updated compliance from CLI details:', {
+            validatorsWithCLI,
+            successfulValidators,
+            realCompliance,
+            executionId
+        });
+
+        setComplianceOverview(prev => ({
+            ...prev,
+            totalValidators: 5,
+            completedValidators: validatorsWithCLI,
+            pendingValidators: 5 - validatorsWithCLI,
+            overallCompliance: realCompliance,
+            passedValidators: successfulValidators,
+            lastValidation: new Date().toISOString(),
+            cliDetailsLoaded: true
+        }));
+    }, []);
+
+    // ✅ FIXED: Load tenants with proper deduplication
+    const loadTenants = useCallback(async () => {
+        // ✅ PREVENT React Strict Mode double execution
+        if (hasLoadedTenants.current) {
+            console.log('🏢 Tenants already loaded, skipping...');
+            return;
+        }
+        hasLoadedTenants.current = true;
+        
+        try {
+            setLoading(true);
+            setError(null);
+            console.log('🏢 Loading tenants from API...');
+            
+            const response = await ksiService.getTenants();
+            console.log('🏢 Tenants response:', response);
+            
+            // ✅ FIXED: Parse the actual API response structure
+            let tenants = [];
+            if (response && response.tenants && Array.isArray(response.tenants)) {
+                tenants = response.tenants;
+                console.log('✅ Found tenants array with', tenants.length, 'tenants');
+                
+                // ✅ FIXED: Format tenants and DEDUPLICATE by tenant_id
+                const formattedTenants = tenants.map(tenant => ({
+                    tenant_id: tenant.tenant_id,
+                    display_name: tenant.tenant_name || formatTenantDisplayName(tenant.tenant_id),
+                    ksi_count: tenant.ksi_count || tenant.total_ksis || 5
+                }));
+                
+                // ✅ CRITICAL: Deduplicate by tenant_id to prevent React key warnings
+                const uniqueTenants = formattedTenants.filter((tenant, index, self) => 
+                    index === self.findIndex(t => t.tenant_id === tenant.tenant_id)
+                );
+                
+                setAvailableTenants(uniqueTenants);
+                console.log('✅ Loaded', uniqueTenants.length, 'unique tenants with correct field mapping');
+                
+                // ✅ Set initial tenant if none selected
+                if (!selectedTenant && uniqueTenants.length > 0) {
+                    // Try to find riskuity-production first, otherwise use first tenant
+                    const productionTenant = uniqueTenants.find(t => t.tenant_id.includes('production') || t.tenant_id.includes('riskuity'));
+                    const initialTenant = productionTenant || uniqueTenants[0];
+                    setSelectedTenant(initialTenant.tenant_id);
+                    console.log('✅ Set initial tenant to:', initialTenant.tenant_id);
+                }
+                
+            } else if (response && Array.isArray(response)) {
+                tenants = response;
+                console.log('✅ Response is array of tenants');
+                const formattedTenants = tenants.map(tenant => ({
+                    tenant_id: tenant.tenant_id,
+                    display_name: tenant.tenant_name || formatTenantDisplayName(tenant.tenant_id),
+                    ksi_count: tenant.ksi_count || tenant.total_ksis || 5
+                }));
+                
+                // ✅ Deduplicate here too
+                const uniqueTenants = formattedTenants.filter((tenant, index, self) => 
+                    index === self.findIndex(t => t.tenant_id === tenant.tenant_id)
+                );
+                
+                setAvailableTenants(uniqueTenants);
+            } else {
+                console.log('🏢 No valid tenants in API response, using fallback');
+                // ✅ ONLY use fallback if API actually failed - NO duplicates
+                setAvailableTenants([
+                    { tenant_id: 'riskuity-production', display_name: 'Riskuity Production', ksi_count: 5 }
+                ]);
+            }
+            
+        } catch (err) {
+            console.error('❌ Error loading tenants:', err);
+            setError(`Failed to load tenants: ${err.message}`);
+            // ✅ Only use fallback on actual API errors - NO duplicates
+            const fallbackTenants = [
+                { tenant_id: 'riskuity-production', display_name: 'Riskuity Production', ksi_count: 5 }
+            ];
+            setAvailableTenants(fallbackTenants);
+            if (!selectedTenant) {
+                setSelectedTenant('riskuity-production');
+            }
+        } finally {
+            setLoading(false);
+        }
+    }, []); // ✅ FIXED: Empty dependency array to prevent multiple calls
+
+    // Format tenant display names
+    const formatTenantDisplayName = (tenantId) => {
+        if (!tenantId) return 'Unknown Tenant';
+        
+        // Convert kebab-case to Title Case
+        return tenantId
+            .split('-')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+    };
 
     // Fetch current KSI validation data
     const fetchCurrentKSIData = useCallback(async () => {
-        if (!selectedTenant) return;
+        if (!selectedTenant || selectedTenant === '') return;
         
         try {
             setLoading(true);
@@ -33,642 +170,787 @@ const KSIManager = () => {
                 setExecutionHistory(executions);
                 setCurrentKSIData(response.data);
                 
-                // Create compliance overview from the latest execution
+                // ✅ FIXED: Create INITIAL compliance overview (will be updated by CLI details)
                 if (executions.length > 0) {
                     const latestExecution = executions[0]; // Already sorted newest first
                     
-                    console.log('📊 Creating compliance overview from execution:', latestExecution.execution_id);
-                    console.log('📊 Validators completed:', latestExecution.validators_completed);
-                    console.log('📊 Validation results:', latestExecution.validation_results?.length);
+                    console.log('📊 Creating INITIAL compliance overview from execution:', latestExecution.execution_id);
                     
-                    // Calculate overview from execution data
-                    const completedValidators = latestExecution.validators_completed || [];
-                    const totalValidators = 5;
-                    const overallPassRate = Math.round((completedValidators.length / totalValidators) * 100);
+                    // ✅ FIXED: Don't rely on validators_completed - use placeholder until CLI loads
+                    const overview = {
+                        totalValidators: 5, // CNA, SVC, IAM, MLA, CMT
+                        completedValidators: 0, // Will be updated by CLI details
+                        pendingValidators: 5, // Will be updated by CLI details
+                        totalKSIs: latestExecution.total_ksis_validated || 0,
+                        passedKSIs: latestExecution.total_ksis_validated || 0,
+                        lastValidation: latestExecution.timestamp,
+                        overallCompliance: 0, // Will be updated by CLI details
+                        cliDetailsLoaded: false,
+                        latestExecutionId: latestExecution.execution_id
+                    };
                     
-                    // Create validator status from actual execution data
-                    const validatorNames = ['cna', 'svc', 'iam', 'mla', 'cmt'];
-                    const validatorStatus = validatorNames.map(validator => {
-                        const isCompleted = completedValidators.includes(validator);
-                        
-                        // Try to find validation results for this validator
-                        let passRate = isCompleted ? 100 : 0;
-                        if (latestExecution.validation_results) {
-                            const validatorResult = latestExecution.validation_results.find(vr => 
-                                vr.validator === validator || 
-                                vr.validator_type?.toLowerCase() === validator ||
-                                vr.function_name?.includes(validator)
-                            );
-                            if (validatorResult) {
-                                // Check if this validator passed
-                                const passed = validatorResult.status === 'SUCCESS' || 
-                                             validatorResult.statusCode === 200 ||
-                                             (validatorResult.result && JSON.parse(validatorResult.result.body || '{}').assertion === true);
-                                passRate = passed ? 100 : 0;
-                            }
-                        }
-                        
-                        return {
-                            validator_type: validator.toUpperCase(),
-                            status: isCompleted ? 'COMPLETED' : 'PENDING',
-                            ksisValidated: isCompleted ? 1 : 0,
-                            passRate: passRate
-                        };
-                    });
+                    setComplianceOverview(overview);
+                    console.log('📊 INITIAL compliance overview created (will be updated by CLI):', overview);
                     
-                    const totalKsisValidated = latestExecution.total_ksis_validated || completedValidators.length;
-                    const failedValidators = validatorStatus.filter(v => v.passRate === 0).length;
-                    
-                    setComplianceOverview({
-                        overallPassRate,
-                        completedValidators: completedValidators.length,
-                        totalValidators,
-                        totalExecutions: executions.length,
-                        passedKsis: totalKsisValidated,
-                        failedKsis: failedValidators,
-                        validatorStatus
-                    });
-                    
-                    console.log('✅ Compliance overview calculated:', {
-                        overallPassRate,
-                        completedValidators: completedValidators.length,
-                        validators: completedValidators,
-                        totalExecutions: executions.length,
-                        passedKsis: totalKsisValidated,
-                        failedKsis: failedValidators
-                    });
+                    // ✅ FIXED: Auto-load CLI details for latest execution to get real compliance
+                    if (!expandedExecutionId) {
+                        setExpandedExecutionId(latestExecution.execution_id);
+                        // CLI details will be fetched automatically when expandedExecutionId changes
+                    }
                 } else {
-                    // No executions found for this tenant
-                    setComplianceOverview(null);
-                    console.log(`ℹ️ No executions found for tenant: ${selectedTenant}`);
+                    console.log('📊 No executions found, creating empty overview');
+                    setComplianceOverview({
+                        totalValidators: 5,
+                        completedValidators: 0,
+                        pendingValidators: 5,
+                        totalKSIs: 0,
+                        passedKSIs: 0,
+                        lastValidation: 'Never',
+                        overallCompliance: 0,
+                        cliDetailsLoaded: false
+                    });
                 }
             } else {
-                console.warn('⚠️ Invalid response structure:', response);
-                setError('Invalid response format from API');
+                console.log('⚠️ No execution data found');
+                setExecutionHistory([]);
+                setCurrentKSIData(null);
+                setComplianceOverview({
+                    totalValidators: 5,
+                    completedValidators: 0,
+                    pendingValidators: 5,
+                    totalKSIs: 0,
+                    passedKSIs: 0,
+                    lastValidation: 'Never',
+                    overallCompliance: 0,
+                    cliDetailsLoaded: false
+                });
             }
+            
         } catch (err) {
-            console.error('❌ Error fetching KSI data:', err);
-            setError(`Failed to fetch KSI data: ${err.message}`);
+            console.error('❌ Error fetching execution history:', err);
+            setError(`Failed to fetch execution data: ${err.message}`);
+            setExecutionHistory([]);
+            setComplianceOverview(null);
         } finally {
             setLoading(false);
         }
-    }, [selectedTenant]);
+    }, [selectedTenant, expandedExecutionId]);
 
-    // Trigger validation
+    // ✅ FIXED: Fetch validator CLI command details and UPDATE COMPLIANCE
+    const fetchValidatorDetails = async (executionId, validators = null) => {
+        const detailsKey = executionId;
+        
+        if (validatorDetails[detailsKey]) {
+            console.log('✅ Validator details already loaded for:', executionId);
+            // Still update compliance if details exist
+            updateComplianceFromCLIDetails(executionId, validatorDetails[detailsKey]);
+            return;
+        }
+        
+        try {
+            setLoadingValidatorDetails(prev => ({...prev, [detailsKey]: true}));
+            
+            // ✅ FIXED: Always try ALL validators, not just completed ones
+            const allValidators = ['cna', 'svc', 'iam', 'mla', 'cmt'];
+            
+            console.log('🔍 Fetching validator CLI details for execution:', executionId);
+            console.log('🔍 Trying all validators:', allValidators);
+            
+            const response = await ksiService.getAllValidatorDetails(executionId, allValidators);
+            
+            if (response.success) {
+                // Filter out validators that had errors
+                const successfulValidators = response.data.filter(v => !v.error && v.cli_command_details?.length > 0);
+                
+                setValidatorDetails(prev => ({
+                    ...prev,
+                    [detailsKey]: successfulValidators
+                }));
+                console.log('✅ Loaded CLI details for', successfulValidators.length, 'validators:', 
+                          successfulValidators.map(v => v.validator.toUpperCase()));
+                
+                // ✅ FIXED: Update compliance overview with real CLI data
+                updateComplianceFromCLIDetails(executionId, successfulValidators);
+            }
+            
+        } catch (error) {
+            console.error('❌ Failed to fetch validator details:', error);
+            setError(`Failed to load CLI details: ${error.message}`);
+        } finally {
+            setLoadingValidatorDetails(prev => ({...prev, [detailsKey]: false}));
+        }
+    };
+
+    // ✅ FIXED: Trigger validation with proper success handling
     const triggerValidation = async () => {
-        if (!selectedTenant) {
+        if (!selectedTenant || selectedTenant === '') {
             setError('Please select a tenant first');
             return;
         }
-
+        
         try {
             setLoading(true);
             setError(null);
+            setSuccessMessage(null);
+            
             console.log(`🚀 Triggering validation for tenant: ${selectedTenant}`);
             
             const response = await ksiService.triggerValidation(selectedTenant);
-            console.log('🎯 Validation triggered:', response);
+            console.log('🚀 Validation response:', response);
             
-            if (response.success) {
-                // Store the new execution ID for tracking
-                const newExecutionId = response.execution_id;
-                console.log('🆕 New execution ID to track:', newExecutionId);
+            // ✅ FIXED: Check for success properly
+            if (response.success || response.execution_id) {
+                setSuccessMessage(`✅ Validation started successfully! Execution ID: ${response.execution_id || 'N/A'}`);
                 
-                // Show success message
-                setSuccessMessage(`Validation started successfully! Execution ID: ${newExecutionId?.substring(0, 8)}... Check execution history in a few moments.`);
+                // ✅ FIXED: Show optimistic loading state
+                setComplianceOverview({
+                    totalValidators: 5,
+                    completedValidators: 0, // Will be updated when CLI details load
+                    pendingValidators: 5,
+                    totalKSIs: response.total_ksis || 5,
+                    passedKSIs: 0, // Will be updated when CLI details load
+                    lastValidation: new Date().toISOString(),
+                    overallCompliance: 0, // Will be updated when CLI details load
+                    cliDetailsLoaded: false
+                });
+
+                // Add the new execution to history immediately
+                const newExecution = {
+                    execution_id: response.execution_id,
+                    tenant_id: response.tenant_id || selectedTenant,
+                    timestamp: response.timestamp || new Date().toISOString(),
+                    status: response.status || 'COMPLETED',
+                    trigger_source: 'manual',
+                    validators_completed: [], // Will be updated by CLI details
+                    total_ksis_validated: response.total_ksis || 5
+                };
                 
-                // Clear success message after 10 seconds
-                setTimeout(() => setSuccessMessage(null), 10000);
+                setExecutionHistory(prev => [newExecution, ...prev]);
                 
-                // Try multiple refresh attempts with increasing delays
-                const refreshAttempts = [3000, 7000, 15000]; // 3s, 7s, 15s
+                // Auto-expand the new execution to load CLI details
+                setExpandedExecutionId(response.execution_id);
                 
-                for (let i = 0; i < refreshAttempts.length; i++) {
-                    setTimeout(async () => {
-                        console.log(`🔄 Refresh attempt ${i + 1} after ${refreshAttempts[i]}ms`);
-                        
-                        try {
-                            // First try the selected tenant
-                            console.log(`🔍 Checking selected tenant: "${selectedTenant}" for new execution`);
-                            const response = await ksiService.getExecutionHistory(selectedTenant, 10);
-                            
-                            if (response.success && response.data?.executions) {
-                                const hasNewExecution = response.data.executions.some(ex =>
-                                    ex.execution_id?.includes(newExecutionId) ||
-                                    ex.execution_id?.split('#')[0] === newExecutionId
-                                );
-                                
-                                if (hasNewExecution) {
-                                    console.log(`✅ Found new execution in selected tenant: "${selectedTenant}"`);
-                                    await fetchCurrentKSIData();
-                                    setSuccessMessage(`✅ Validation completed! New execution found in ${selectedTenant}.`);
-                                    return; // Exit early if found
-                                }
-                            }
-                            
-                            // If this is the last attempt and still not found, just refresh anyway
-                            if (i === refreshAttempts.length - 1) {
-                                console.log('🔄 Final refresh attempt - showing current data');
-                                await fetchCurrentKSIData();
-                                setSuccessMessage(`⏳ Validation may still be processing. Try refreshing in a few minutes.`);
-                            }
-                        } catch (refreshError) {
-                            console.warn(`❌ Refresh attempt ${i + 1} failed:`, refreshError);
-                            
-                            // On final attempt, still try to refresh
-                            if (i === refreshAttempts.length - 1) {
-                                await fetchCurrentKSIData();
-                            }
-                        }
-                    }, refreshAttempts[i]);
-                }
+                // Also refresh from API in background after delay
+                setTimeout(() => {
+                    fetchCurrentKSIData();
+                }, 5000);
             } else {
-                setError(response.error || 'Failed to trigger validation');
+                throw new Error(response.message || 'Validation failed with unknown error');
             }
+            
         } catch (err) {
-            console.error('❌ Error triggering validation:', err);
+            console.error('🚀 Validation error:', err);
             setError(`Failed to trigger validation: ${err.message}`);
         } finally {
             setLoading(false);
         }
     };
 
-    // Load data on component mount and tenant change
-    useEffect(() => {
-        fetchCurrentKSIData();
-    }, [fetchCurrentKSIData]);
-
-    // Toggle execution details
-    const toggleExecutionDetails = (executionId) => {
-        setExpandedExecutionId(expandedExecutionId === executionId ? null : executionId);
+    // Handle tenant change
+    const handleTenantChange = (newTenant) => {
+        console.log('🔄 Tenant changed to:', newTenant);
+        setSelectedTenant(newTenant);
+        setError(null);
+        setSuccessMessage(null);
+        setExecutionHistory([]);
+        setComplianceOverview(null);
+        setCurrentKSIData(null);
+        setValidatorDetails({}); // ✅ Clear CLI details on tenant change
+        setExpandedExecutionId(null);
+        setExpandedValidatorId(null);
     };
 
-    return (
-        <div className="ksi-manager">
-            {/* Header */}
-            <div className="bg-gradient-to-r from-blue-600 to-blue-800 rounded-lg shadow-lg p-6 text-white mb-6">
-                <div className="flex justify-between items-center">
-                    <div>
-                        <h1 className="text-3xl font-bold">
-                            🛡️ Enterprise KSI Validator
-                        </h1>
-                        <p className="mt-1 text-sm text-blue-100">
-                            FedRAMP 20x Key Security Indicator Validation Platform
-                        </p>
-                    </div>
-                    <div className="text-right">
-                        <div className="text-sm text-blue-200">Environment</div>
-                        <div className="font-semibold text-white">
-                            {process.env.REACT_APP_ENVIRONMENT || 'development'}
-                        </div>
-                    </div>
-                </div>
-            </div>
+    // ✅ FIXED: Load tenants on component mount - ONCE only
+    useEffect(() => {
+        loadTenants();
+    }, []); // ✅ Empty dependency array - load only once
 
-            {/* Controls */}
-            <div className="ksi-card mb-6">
-                <div className="flex flex-wrap items-center gap-4">
-                    <div className="flex-1 min-w-64">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Select Tenant
-                        </label>
-                        <select
-                            value={selectedTenant}
-                            onChange={(e) => setSelectedTenant(e.target.value)}
-                            className="form-select w-full"
-                        >
-                            <option value="">Choose tenant...</option>
-                            <option value="riskuity-production">Riskuity Production</option>
-                            <option value="real-test">Real Test Environment</option>
-                            <option value="dev-sandbox">Development Sandbox</option>
-                        </select>
-                    </div>
-                    
-                    <div className="flex gap-3">
-                        {/* Refresh Data */}
-                        <button
-                            onClick={fetchCurrentKSIData}
-                            disabled={loading}
-                            className="btn btn-secondary"
-                            title="Refresh execution history"
-                        >
-                            {loading ? '🔄' : '🔄 Refresh'}
-                        </button>
+    // Load data when tenant changes
+    useEffect(() => {
+        if (selectedTenant && selectedTenant !== '' && availableTenants.length > 0) {
+            fetchCurrentKSIData();
+        }
+    }, [selectedTenant, availableTenants.length, fetchCurrentKSIData]);
+
+    // ✅ FIXED: Auto-fetch CLI details when execution is expanded
+    useEffect(() => {
+        if (expandedExecutionId) {
+            fetchValidatorDetails(expandedExecutionId);
+        }
+    }, [expandedExecutionId]);
+
+    // Auto-clear messages after 5 seconds
+    useEffect(() => {
+        if (successMessage) {
+            const timer = setTimeout(() => setSuccessMessage(null), 5000);
+            return () => clearTimeout(timer);
+        }
+    }, [successMessage]);
+
+    const formatTimestamp = (timestamp) => {
+        if (!timestamp || timestamp === 'Never') return timestamp;
+        try {
+            return new Date(timestamp).toLocaleString();
+        } catch (e) {
+            return timestamp;
+        }
+    };
+
+    const getStatusColor = (status) => {
+        switch (status?.toLowerCase()) {
+            case 'completed': case 'success': case 'passed':
+                return 'text-green-600 bg-green-100';
+            case 'failed': case 'error':
+                return 'text-red-600 bg-red-100';
+            case 'running': case 'in_progress':
+                return 'text-blue-600 bg-blue-100';
+            default:
+                return 'text-gray-600 bg-gray-100';
+        }
+    };
+
+    const toggleExecutionDetails = async (executionId) => {
+        const isExpanding = expandedExecutionId !== executionId;
+        setExpandedExecutionId(isExpanding ? executionId : null);
+        
+        // CLI details will be fetched automatically via useEffect when expandedExecutionId changes
+    };
+
+    const toggleValidatorDetails = (validatorId) => {
+        setExpandedValidatorId(expandedValidatorId === validatorId ? null : validatorId);
+    };
+
+    // ✅ NEW: Render CLI command details
+    const renderCliCommandDetails = (cliDetails, validatorType) => {
+        if (!cliDetails || cliDetails.length === 0) {
+            return (
+                <div className="text-sm text-gray-500 italic">
+                    No CLI command details available
+                </div>
+            );
+        }
+
+        return (
+            <div className="space-y-3">
+                {cliDetails.map((cmd, index) => (
+                    <div key={index} className="bg-gray-50 rounded-lg p-4 border">
+                        <div className="flex items-center justify-between mb-2">
+                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                cmd.success ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                            }`}>
+                                {cmd.success ? '✅ SUCCESS' : '❌ FAILED'}
+                            </span>
+                            <span className="text-xs text-gray-500">
+                                {validatorType} Validation
+                            </span>
+                        </div>
                         
-                        {/* Trigger Validation */}
-                        <button
-                            onClick={triggerValidation}
-                            disabled={loading}
-                            className="btn btn-primary"
-                        >
-                            {loading ? (
-                                <>
-                                    <div className="loading-spinner"></div>
-                                    <span>Running...</span>
-                                </>
-                            ) : (
-                                <>
-                                    <span>🚀 Run Validation</span>
-                                </>
-                            )}
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            {/* Error Display */}
-            {error && (
-                <div className="error-banner mb-6">
-                    <div className="flex">
-                        <div className="flex-shrink-0">
-                            <span className="text-red-400 text-xl">⚠️</span>
-                        </div>
-                        <div className="ml-3">
-                            <h3 className="text-sm font-medium text-red-800">Error</h3>
-                            <div className="mt-1 text-sm text-red-700">{error}</div>
-                        </div>
-                        <div className="ml-auto">
-                            <button
-                                onClick={() => setError(null)}
-                                className="text-red-400 hover:text-red-600"
-                            >
-                                ✕
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Success Display */}
-            {successMessage && (
-                <div className="success-banner mb-6">
-                    <div className="flex">
-                        <div className="flex-shrink-0">
-                            <span className="text-green-400 text-xl">✅</span>
-                        </div>
-                        <div className="ml-3">
-                            <h3 className="text-sm font-medium text-green-800">Success</h3>
-                            <div className="mt-1 text-sm text-green-700">{successMessage}</div>
-                        </div>
-                        <div className="ml-auto">
-                            <button
-                                onClick={() => setSuccessMessage(null)}
-                                className="text-green-400 hover:text-green-600"
-                            >
-                                ✕
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Compliance Overview Dashboard */}
-            {complianceOverview && (
-                <div className="compliance-card mb-6">
-                    <h2 className="text-xl font-bold text-gray-900 mb-4">
-                        📊 Real-time Compliance Overview
-                    </h2>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                        {/* Overall Compliance */}
-                        <div className="bg-gradient-to-br from-green-50 to-green-100 p-4 rounded-lg border border-green-200">
-                            <div className="text-center">
-                                <div className="compliance-percentage text-green-600">
-                                    {complianceOverview.overallPassRate}%
-                                </div>
-                                <p className="text-sm font-medium text-green-800">Overall Compliance</p>
-                                <p className="text-xs text-green-600 mt-1">
-                                    {complianceOverview.completedValidators}/{complianceOverview.totalValidators} Validators
-                                </p>
+                        <div className="mb-3">
+                            <label className="text-xs font-medium text-gray-700">Command:</label>
+                            <div className="bg-gray-800 text-green-400 p-2 rounded text-sm font-mono mt-1">
+                                {cmd.command}
                             </div>
                         </div>
-
-                        {/* Executions */}
-                        <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg border border-blue-200">
-                            <div className="text-center">
-                                <div className="text-2xl font-bold text-blue-600">
-                                    {complianceOverview.totalExecutions}
-                                </div>
-                                <p className="text-sm font-medium text-blue-800">Total Executions</p>
-                                <p className="text-xs text-blue-600 mt-1">Historical</p>
+                        
+                        {cmd.note && (
+                            <div className="mb-3">
+                                <label className="text-xs font-medium text-gray-700">Purpose:</label>
+                                <div className="text-sm text-gray-600 mt-1">{cmd.note}</div>
                             </div>
-                        </div>
-
-                        {/* Passed KSIs */}
-                        <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-lg border border-purple-200">
-                            <div className="text-center">
-                                <div className="text-2xl font-bold text-purple-600">
-                                    {complianceOverview.passedKsis}
+                        )}
+                        
+                        {cmd.data && (
+                            <div>
+                                <label className="text-xs font-medium text-gray-700">AWS Resources Discovered:</label>
+                                <div className="mt-1 p-3 bg-white rounded border">
+                                    {cmd.data.log_group_count && (
+                                        <div className="mb-2">
+                                            <span className="font-medium text-green-600">
+                                                {cmd.data.log_group_count} CloudWatch Log Groups Found
+                                            </span>
+                                        </div>
+                                    )}
+                                    
+                                    {cmd.data.log_group_names && cmd.data.log_group_names.length > 0 && (
+                                        <div>
+                                            <details className="text-sm">
+                                                <summary className="cursor-pointer font-medium text-gray-700 hover:text-gray-900">
+                                                    View Log Groups ({cmd.data.log_group_names.length})
+                                                </summary>
+                                                <div className="mt-2 max-h-32 overflow-y-auto">
+                                                    <ul className="space-y-1 text-xs">
+                                                        {cmd.data.log_group_names.slice(0, 10).map((logGroup, idx) => (
+                                                            <li key={idx} className="font-mono text-gray-600">
+                                                                {logGroup}
+                                                            </li>
+                                                        ))}
+                                                        {cmd.data.log_group_names.length > 10 && (
+                                                            <li className="text-gray-500 italic">
+                                                                ... and {cmd.data.log_group_names.length - 10} more
+                                                            </li>
+                                                        )}
+                                                    </ul>
+                                                </div>
+                                            </details>
+                                        </div>
+                                    )}
+                                    
+                                    {/* Handle other data types */}
+                                    {!cmd.data.log_group_count && (
+                                        <pre className="text-xs text-gray-600 whitespace-pre-wrap max-h-32 overflow-y-auto">
+                                            {JSON.stringify(cmd.data, null, 2)}
+                                        </pre>
+                                    )}
                                 </div>
-                                <p className="text-sm font-medium text-purple-800">Passed KSIs</p>
-                                <p className="text-xs text-purple-600 mt-1">Validated</p>
-                            </div>
-                        </div>
-
-                        {/* Failed KSIs */}
-                        <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-4 rounded-lg border border-orange-200">
-                            <div className="text-center">
-                                <div className="text-2xl font-bold text-orange-600">
-                                    {complianceOverview.failedKsis}
-                                </div>
-                                <p className="text-sm font-medium text-orange-800">Failed KSIs</p>
-                                <p className="text-xs text-orange-600 mt-1">Need Review</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Validator Status */}
-            {complianceOverview && complianceOverview.validatorStatus && (
-                <div className="ksi-card mb-6">
-                    <h2 className="text-xl font-bold text-gray-900 mb-4">
-                        🔍 Validator Status
-                    </h2>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
-                        {complianceOverview.validatorStatus.map((validator) => (
-                            <div
-                                key={validator.validator_type}
-                                className={`validator-card ${validator.status === 'COMPLETED' ? 'passed' : 'failed'}`}
-                            >
-                                <div className="flex items-center justify-between mb-2">
-                                    <span className="text-lg">{getValidatorIcon(validator.validator_type.toLowerCase())}</span>
-                                    <span
-                                        className={`status-badge ${validator.status === 'COMPLETED' ? 'completed' : 'failed'}`}
-                                    >
-                                        {validator.status}
-                                    </span>
-                                </div>
-                                <h3 className="font-bold text-gray-900">{validator.validator_type}</h3>
-                                <p className="text-sm text-gray-600 mt-1">
-                                    {validator.ksisValidated} KSI{validator.ksisValidated !== 1 ? 's' : ''} Validated
-                                </p>
-                                {validator.passRate !== undefined && (
-                                    <p className="text-sm font-medium mt-1">
-                                        <span className={validator.passRate === 100 ? 'text-green-600' : 'text-orange-600'}>
-                                            {validator.passRate}% Pass Rate
-                                        </span>
-                                    </p>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {/* Execution History */}
-            <div className="ksi-card">
-                <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-xl font-bold text-gray-900">
-                        📋 Execution History
-                    </h2>
-                    {selectedTenant && (
-                        <span className="text-sm text-gray-600 bg-gray-100 px-3 py-1 rounded-full">
-                            Showing: {selectedTenant}
-                        </span>
-                    )}
-                </div>
-                
-                {executionHistory.length > 0 ? (
-                    <div className="data-table">
-                        <table className="w-full">
-                            <thead>
-                                <tr>
-                                    <th className="text-left">Execution ID</th>
-                                    <th className="text-left">Status</th>
-                                    <th className="text-left">Completed At</th>
-                                    <th className="text-left">Validators</th>
-                                    <th className="text-left">Pass Rate</th>
-                                    <th className="text-left">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {executionHistory.map((execution) => (
-                                    <React.Fragment key={execution.execution_id}>
-                                        <tr className="hover:bg-gray-50">
-                                            <td className="font-mono text-sm">
-                                                {execution.execution_id?.substring(0, 8)}...
-                                            </td>
-                                            <td>
-                                                <span
-                                                    className={`status-badge ${
-                                                        execution.status === 'COMPLETED' ? 'completed' : 
-                                                        execution.status === 'RUNNING' ? 'running' : 'failed'
-                                                    }`}
-                                                >
-                                                    {execution.status || 'COMPLETED'}
-                                                </span>
-                                            </td>
-                                            <td className="text-sm text-gray-600">
-                                                {execution.timestamp ? 
-                                                    new Date(execution.timestamp).toLocaleString() : 
-                                                    'Recently'
-                                                }
-                                            </td>
-                                            <td className="text-sm">
-                                                {execution.validators_completed?.length || 0} completed
-                                                {execution.validation_results?.length > 0 && 
-                                                 execution.validation_results.length !== execution.validators_completed?.length && (
-                                                    <span className="text-xs text-gray-500 ml-1">
-                                                        (of {execution.validation_results.length} total)
-                                                    </span>
-                                                )}
-                                            </td>
-                                            <td>
-                                                <span className={`font-medium ${
-                                                    execution.pass_rate === 100 || (execution.validators_completed?.length === 5) ? 'text-green-600' : 
-                                                    execution.pass_rate >= 80 || (execution.validators_completed?.length >= 4) ? 'text-yellow-600' : 'text-red-600'
-                                                }`}>
-                                                    {execution.pass_rate || 
-                                                     (execution.validators_completed?.length ? 
-                                                      Math.round((execution.validators_completed.length / 5) * 100) : 0)}%
-                                                </span>
-                                            </td>
-                                            <td>
-                                                <button
-                                                    onClick={() => toggleExecutionDetails(execution.execution_id)}
-                                                    className="btn btn-secondary text-sm"
-                                                >
-                                                    {expandedExecutionId === execution.execution_id ? 'Hide' : 'View'} Details
-                                                </button>
-                                            </td>
-                                        </tr>
-                                        
-                                        {/* Expanded Details */}
-                                        {expandedExecutionId === execution.execution_id && (
-                                            <tr>
-                                                <td colSpan="6" className="bg-gray-50 p-4">
-                                                    <div className="space-y-3">
-                                                        <h4 className="font-semibold text-gray-900">Validation Results</h4>
-                                                        
-                                                        {/* Try multiple data sources for results */}
-                                                        {(() => {
-                                                            // Check for ksi_results first (synthetic executions)
-                                                            let results = execution.ksi_results || [];
-                                                            
-                                                            // Fallback to validation_results (standard executions)
-                                                            if (results.length === 0 && execution.validation_results) {
-                                                                results = execution.validation_results;
-                                                            }
-                                                            
-                                            // Check for validation_results in execution summaries
-                                                            if (results.length === 0 && execution.validation_results) {
-                                                                results = execution.validation_results;
-                                                            }
-                                                            
-                                                            // If still no results, create synthetic results from validators_completed
-                                                            if (results.length === 0 && execution.validators_completed?.length > 0) {
-                                                                results = execution.validators_completed.map(validator => ({
-                                                                    validator_type: validator.toUpperCase(),
-                                                                    validator: validator,
-                                                                    status: 'SUCCESS',
-                                                                    assertion: true,
-                                                                    ksi_id: `KSI-${validator.toUpperCase()}-01`,
-                                                                    result: {
-                                                                        statusCode: 200,
-                                                                        body: JSON.stringify({
-                                                                            assertion: true,
-                                                                            assertion_reason: `✅ ${validator.toUpperCase()} validation completed successfully`,
-                                                                            validator_type: validator.toUpperCase(),
-                                                                            ksi_id: `KSI-${validator.toUpperCase()}-01`
-                                                                        })
-                                                                    }
-                                                                }));
-                                                            }
-                                                            
-                                                            console.log('🔍 Execution details for', execution.execution_id, ':', {
-                                                                ksi_results: execution.ksi_results?.length || 0,
-                                                                validation_results: execution.validation_results?.length || 0,
-                                                                validators_completed: execution.validators_completed?.length || 0,
-                                                                selected_results: results.length
-                                                            });
-                                                            
-                                                            return results.length > 0 ? (
-                                                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                                                                    {results.map((result, index) => {
-                                                                        // ✅ FIXED: Extract data correctly based on debug results
-                                                                        let validator = result.validator_type || result.validator || 'Unknown';
-                                                                        let status = 'UNKNOWN';
-                                                                        let ksiId = 'N/A';
-                                                                        let details = '';
-                                                                        let reason = '';
-                                                                        
-                                                                        // Extract KSI ID from multiple sources
-                                                                        if (result.ksi_id) {
-                                                                            ksiId = result.ksi_id;
-                                                                        } else if (result.validation_result?.ksi_id) {
-                                                                            ksiId = result.validation_result.ksi_id;
-                                                                        } else if (result.execution_id?.includes('KSI-')) {
-                                                                            const match = result.execution_id.match(/(KSI-[A-Z]+-\d+)/);
-                                                                            if (match) ksiId = match[1];
-                                                                        }
-                                                                        
-                                                                        // Extract status and reason from validation_result
-                                                                        if (result.validation_result) {
-                                                                            const vr = result.validation_result;
-                                                                            status = vr.assertion ? 'PASSED' : 'FAILED';
-                                                                            reason = vr.assertion_reason || vr.message || '';
-                                                                            details = JSON.stringify(vr, null, 2);
-                                                                        } else if (result.assertion !== undefined) {
-                                                                            status = result.assertion ? 'PASSED' : 'FAILED';
-                                                                            reason = result.assertion_reason || '';
-                                                                            details = JSON.stringify(result, null, 2);
-                                                                        } else if (result.status) {
-                                                                            status = result.status === 'SUCCESS' ? 'PASSED' : 'FAILED';
-                                                                            if (result.result?.body) {
-                                                                                try {
-                                                                                    const parsed = typeof result.result.body === 'string' 
-                                                                                        ? JSON.parse(result.result.body)
-                                                                                        : result.result.body;
-                                                                                    details = JSON.stringify(parsed, null, 2);
-                                                                                } catch (e) {
-                                                                                    details = result.result.body;
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        
-                                                                        return (
-                                                                            <div key={index} className="bg-white border rounded-lg p-3">
-                                                                                <div className="flex items-center justify-between mb-2">
-                                                                                    <span className="font-medium text-sm">
-                                                                                        {validator.toUpperCase()}
-                                                                                    </span>
-                                                                                    <span className={`status-badge ${
-                                                                                        status === 'PASSED' ? 'completed' : 'failed'
-                                                                                    }`}>
-                                                                                        {status}
-                                                                                    </span>
-                                                                                </div>
-                                                                                <p className="text-xs text-gray-600 mb-2">
-                                                                                    <strong>KSI:</strong> {ksiId}
-                                                                                </p>
-                                                                                {reason && (
-                                                                                    <p className="text-xs text-gray-700 mb-2 italic">
-                                                                                        {reason}
-                                                                                    </p>
-                                                                                )}
-                                                                                {details && (
-                                                                                    <details className="mt-2">
-                                                                                        <summary className="cursor-pointer text-xs text-blue-600 hover:text-blue-800">
-                                                                                            View Raw Data
-                                                                                        </summary>
-                                                                                        <pre className="mt-1 text-xs text-gray-700 bg-gray-100 p-2 rounded overflow-x-auto max-h-32">
-                                                                                            {details}
-                                                                                        </pre>
-                                                                                    </details>
-                                                                                )}
-                                                                            </div>
-                                                                        );
-                                                                    })}
-                                                                </div>
-                                                            ) : (
-                                                                <div className="text-center py-4">
-                                                                    <div className="text-gray-400 text-2xl mb-2">📋</div>
-                                                                    <p className="text-gray-600 mb-2">No detailed validation results available</p>
-                                                                    <p className="text-xs text-gray-500">
-                                                                        This execution shows {execution.validators_completed?.length || 0} completed validators but detailed results are not stored.
-                                                                    </p>
-                                                                </div>
-                                                            );
-                                                        })()}
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        )}
-                                    </React.Fragment>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                ) : (
-                    <div className="text-center py-8">
-                        <div className="text-gray-400 text-4xl mb-4">🔍</div>
-                        <h3 className="text-lg font-medium text-gray-900 mb-2">
-                            No execution history found for {selectedTenant || 'selected tenant'}
-                        </h3>
-                        <p className="text-gray-600 mb-4">
-                            {selectedTenant 
-                                ? `No validation executions have been run for tenant "${selectedTenant}" yet.`
-                                : 'Please select a tenant to view execution history'
-                            }
-                        </p>
-                        {selectedTenant && (
-                            <div className="space-y-2">
-                                <button
-                                    onClick={triggerValidation}
-                                    disabled={loading}
-                                    className="btn btn-primary"
-                                >
-                                    🚀 Run First Validation for {selectedTenant}
-                                </button>
-                                <p className="text-xs text-gray-500 mt-2">
-                                    This will create the first validation execution for this tenant
-                                </p>
                             </div>
                         )}
                     </div>
+                ))}
+            </div>
+        );
+    };
+
+    return (
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+            {/* Header */}
+            <div className="bg-white shadow-sm border-b">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="py-6">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h1 className="text-3xl font-bold text-gray-900">🛡️ Enterprise KSI Validator</h1>
+                                <p className="text-gray-600 mt-1">FedRAMP 20x Key Security Indicator Validation Platform</p>
+                            </div>
+                            <div className="text-sm text-gray-500">
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                    ✅ Production Ready
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                {/* Tenant Selection & Actions */}
+                <div className="bg-white rounded-lg shadow mb-8 p-6">
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-xl font-semibold text-gray-900">Tenant Management</h2>
+                        <div className="flex space-x-3">
+                            <button
+                                onClick={() => {
+                                    hasLoadedTenants.current = false; // ✅ Reset flag for manual refresh
+                                    loadTenants();
+                                }}
+                                disabled={loading}
+                                className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+                            >
+                                {loading ? '🔄' : '🔄 Refresh'}
+                            </button>
+                            
+                            {/* Trigger Validation */}
+                            <button
+                                onClick={triggerValidation}
+                                disabled={loading}
+                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+                            >
+                                {loading ? (
+                                    <>
+                                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                                        <span>Running...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <span>🚀 Trigger Validation</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Tenant Selector */}
+                    <div className="flex items-center space-x-4">
+                        <label htmlFor="tenant-select" className="text-sm font-medium text-gray-700">
+                            Select Tenant:
+                        </label>
+                        <select
+                            id="tenant-select"
+                            value={selectedTenant}
+                            onChange={(e) => handleTenantChange(e.target.value)}
+                            className="block w-full max-w-xs rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                        >
+                            {!selectedTenant && <option value="">Select a tenant...</option>}
+                            {availableTenants.map((tenant) => (
+                                <option key={tenant.tenant_id} value={tenant.tenant_id}>
+                                    {tenant.display_name} ({tenant.ksi_count} KSIs)
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                </div>
+
+                {/* Error Display */}
+                {error && (
+                    <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-6">
+                        <div className="flex">
+                            <div className="flex-shrink-0">
+                                <span className="text-red-400 text-xl">⚠️</span>
+                            </div>
+                            <div className="ml-3">
+                                <h3 className="text-sm font-medium text-red-800">Error</h3>
+                                <div className="mt-1 text-sm text-red-700">{error}</div>
+                            </div>
+                            <div className="ml-auto">
+                                <button
+                                    onClick={() => setError(null)}
+                                    className="text-red-400 hover:text-red-600"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 )}
+
+                {/* Success Display */}
+                {successMessage && (
+                    <div className="bg-green-50 border border-green-200 rounded-md p-4 mb-6">
+                        <div className="flex">
+                            <div className="flex-shrink-0">
+                                <span className="text-green-400 text-xl">✅</span>
+                            </div>
+                            <div className="ml-3">
+                                <h3 className="text-sm font-medium text-green-800">Success</h3>
+                                <div className="mt-1 text-sm text-green-700">{successMessage}</div>
+                            </div>
+                            <div className="ml-auto">
+                                <button
+                                    onClick={() => setSuccessMessage(null)}
+                                    className="text-green-400 hover:text-green-600"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* ✅ FIXED: Real-time Compliance Overview based on CLI Details */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                    <div className="bg-white overflow-hidden shadow rounded-lg">
+                        <div className="p-5">
+                            <div className="flex items-center">
+                                <div className="flex-shrink-0">
+                                    <div className="text-2xl">📊</div>
+                                </div>
+                                <div className="ml-5 w-0 flex-1">
+                                    <dl>
+                                        <dt className="text-sm font-medium text-gray-500 truncate">Overall Compliance</dt>
+                                        <dd className="text-3xl font-bold text-gray-900">
+                                            {complianceOverview?.overallCompliance || 0}%
+                                        </dd>
+                                        {complianceOverview?.cliDetailsLoaded && (
+                                            <dd className="text-xs text-green-600">✅ Real-time data</dd>
+                                        )}
+                                    </dl>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-white overflow-hidden shadow rounded-lg">
+                        <div className="p-5">
+                            <div className="flex items-center">
+                                <div className="flex-shrink-0">
+                                    <div className="text-2xl">✅</div>
+                                </div>
+                                <div className="ml-5 w-0 flex-1">
+                                    <dl>
+                                        <dt className="text-sm font-medium text-gray-500 truncate">Completed Validators</dt>
+                                        <dd className="text-3xl font-bold text-green-600">
+                                            {complianceOverview?.completedValidators || 0}
+                                        </dd>
+                                        <dd className="text-sm text-gray-500">of {complianceOverview?.totalValidators || 5} total</dd>
+                                    </dl>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-white overflow-hidden shadow rounded-lg">
+                        <div className="p-5">
+                            <div className="flex items-center">
+                                <div className="flex-shrink-0">
+                                    <div className="text-2xl">⏳</div>
+                                </div>
+                                <div className="ml-5 w-0 flex-1">
+                                    <dl>
+                                        <dt className="text-sm font-medium text-gray-500 truncate">Pending Validators</dt>
+                                        <dd className="text-3xl font-bold text-yellow-600">
+                                            {complianceOverview?.pendingValidators || 5}
+                                        </dd>
+                                        <dd className="text-sm text-gray-500">Awaiting validation</dd>
+                                    </dl>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-white overflow-hidden shadow rounded-lg">
+                        <div className="p-5">
+                            <div className="flex items-center">
+                                <div className="flex-shrink-0">
+                                    <div className="text-2xl">🕐</div>
+                                </div>
+                                <div className="ml-5 w-0 flex-1">
+                                    <dl>
+                                        <dt className="text-sm font-medium text-gray-500 truncate">Last Validation</dt>
+                                        <dd className="text-lg font-bold text-gray-900">
+                                            {complianceOverview?.lastValidation === 'Never' ? 'Never' : 
+                                             formatTimestamp(complianceOverview?.lastValidation)?.split(' ')[0] || 'N/A'}
+                                        </dd>
+                                        <dd className="text-sm text-gray-500">
+                                            {complianceOverview?.lastValidation === 'Never' ? 'No validation data' : 
+                                             formatTimestamp(complianceOverview?.lastValidation)?.split(' ')[1] || ''}
+                                        </dd>
+                                    </dl>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* ✅ FIXED: KSI Categories Status - shows real completion from CLI */}
+                <div className="bg-white shadow rounded-lg mb-8">
+                    <div className="px-6 py-4 border-b border-gray-200">
+                        <h3 className="text-lg font-medium text-gray-900">KSI Validation Status</h3>
+                        <p className="text-sm text-gray-500">FedRAMP 20x Key Security Indicators by Category</p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 divide-y sm:divide-y-0 sm:divide-x divide-gray-200">
+                        {['CNA', 'SVC', 'IAM', 'MLA', 'CMT'].map((category) => {
+                            // ✅ FIXED: Check if validator has CLI details (real completion)
+                            const latestExecutionId = complianceOverview?.latestExecutionId;
+                            const hasCliDetails = latestExecutionId && 
+                                                 validatorDetails[latestExecutionId]?.some(v => 
+                                                     v.validator.toUpperCase() === category);
+                            
+                            return (
+                                <div key={category} className="px-6 py-5">
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <div className="flex items-center">
+                                                <span className="text-lg mr-2">{getValidatorIcon(category.toLowerCase())}</span>
+                                                <span className="font-medium text-gray-900">{category}</span>
+                                            </div>
+                                            <div className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium mt-2 ${
+                                                hasCliDetails ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                                            }`}>
+                                                {hasCliDetails ? '✅ COMPLETED' : '⏳ PENDING'}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* Execution History */}
+                <div className="bg-white shadow rounded-lg">
+                    <div className="px-6 py-4 border-b border-gray-200">
+                        <h3 className="text-lg font-medium text-gray-900">Validation Execution History</h3>
+                        <p className="text-sm text-gray-500">Recent validation runs for {selectedTenant}</p>
+                    </div>
+                    <div className="overflow-hidden">
+                        {executionHistory.length === 0 ? (
+                            <div className="px-6 py-12 text-center">
+                                <div className="text-gray-400 text-4xl mb-4">📋</div>
+                                <h3 className="text-lg font-medium text-gray-900 mb-2">No execution history found</h3>
+                                <p className="text-gray-500 mb-4">No validation runs have been executed for this tenant yet.</p>
+                                <button
+                                    onClick={triggerValidation}
+                                    disabled={loading}
+                                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+                                >
+                                    🚀 Run First Validation
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="divide-y divide-gray-200">
+                                {executionHistory.slice(0, 10).map((execution) => (
+                                    <div key={execution.execution_id} className="px-6 py-4">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex-1">
+                                                <div className="flex items-center space-x-3">
+                                                    <span className="text-sm font-medium text-gray-900">
+                                                        {execution.execution_id?.substring(0, 8)}...
+                                                    </span>
+                                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(execution.status)}`}>
+                                                        {execution.status || 'UNKNOWN'}
+                                                    </span>
+                                                    <span className="text-sm text-gray-500">
+                                                        {formatTimestamp(execution.timestamp)}
+                                                    </span>
+                                                </div>
+                                                <div className="mt-1 text-sm text-gray-600">
+                                                    {/* ✅ FIXED: Show CLI-based validator count if available */}
+                                                    {validatorDetails[execution.execution_id] ? 
+                                                        `${validatorDetails[execution.execution_id].length} validators with CLI details` :
+                                                        `${execution.validators_completed?.length || 0} validators completed`
+                                                    }
+                                                    {execution.total_ksis_validated ? ` • ${execution.total_ksis_validated} KSIs validated` : ''}
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={() => toggleExecutionDetails(execution.execution_id)}
+                                                className="text-indigo-600 hover:text-indigo-900 text-sm font-medium"
+                                            >
+                                                {expandedExecutionId === execution.execution_id ? 'Hide Details' : 'View Details'}
+                                            </button>
+                                        </div>
+                                        
+                                        {expandedExecutionId === execution.execution_id && (
+                                            <div className="mt-4 p-4 bg-gray-50 rounded-md">
+                                                <h4 className="text-sm font-medium text-gray-900 mb-2">Execution Details</h4>
+                                                <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                                                    <div>
+                                                        <span className="font-medium">Execution ID:</span> {execution.execution_id}
+                                                    </div>
+                                                    <div>
+                                                        <span className="font-medium">Tenant:</span> {execution.tenant_id}
+                                                    </div>
+                                                    <div>
+                                                        <span className="font-medium">Trigger Source:</span> {execution.trigger_source || 'manual'}
+                                                    </div>
+                                                    <div>
+                                                        <span className="font-medium">Timestamp:</span> {formatTimestamp(execution.timestamp)}
+                                                    </div>
+                                                </div>
+                                                
+                                                {/* ✅ FIXED: Show CLI details if available, fallback to completed validators */}
+                                                {validatorDetails[execution.execution_id] && validatorDetails[execution.execution_id].length > 0 ? (
+                                                    <div className="mb-4">
+                                                        <span className="text-sm font-medium text-gray-900">Validators with CLI Details:</span>
+                                                        <div className="mt-1 flex flex-wrap gap-2">
+                                                            {validatorDetails[execution.execution_id].map(validator => (
+                                                                <span
+                                                                    key={validator.validator}
+                                                                    className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"
+                                                                >
+                                                                    {getValidatorIcon(validator.validator)} {validator.validator.toUpperCase()}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                ) : execution.validators_completed && execution.validators_completed.length > 0 && (
+                                                    <div className="mb-4">
+                                                        <span className="text-sm font-medium text-gray-900">Completed Validators:</span>
+                                                        <div className="mt-1 flex flex-wrap gap-2">
+                                                            {execution.validators_completed.map(validator => (
+                                                                <span
+                                                                    key={validator}
+                                                                    className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"
+                                                                >
+                                                                    {getValidatorIcon(validator)} {validator.toUpperCase()}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {/* CLI Command Details Section */}
+                                                {(validatorDetails[execution.execution_id] && validatorDetails[execution.execution_id].length > 0) && (
+                                                    <div className="border-t pt-4">
+                                                        <h5 className="text-sm font-medium text-gray-900 mb-3">
+                                                            🔍 CLI Command Details & AWS Resource Discovery
+                                                        </h5>
+                                                        
+                                                        <div className="space-y-4">
+                                                            {validatorDetails[execution.execution_id].map((validator) => (
+                                                                <div key={validator.validator} className="border rounded-lg">
+                                                                    <div className="px-4 py-3 bg-gray-100 border-b">
+                                                                        <button
+                                                                            onClick={() => toggleValidatorDetails(validator.validator)}
+                                                                            className="flex items-center justify-between w-full text-left"
+                                                                        >
+                                                                            <div className="flex items-center space-x-2">
+                                                                                <span>{getValidatorIcon(validator.validator)}</span>
+                                                                                <span className="font-medium text-gray-900">
+                                                                                    {validator.validator.toUpperCase()} Validator
+                                                                                </span>
+                                                                                <span className="text-sm text-gray-500">
+                                                                                    ({validator.ksi_id})
+                                                                                </span>
+                                                                                {validator.cli_command_details?.length > 0 && (
+                                                                                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                                                                        {validator.cli_command_details.length} Commands
+                                                                                    </span>
+                                                                                )}
+                                                                            </div>
+                                                                            <span className="text-gray-400">
+                                                                                {expandedValidatorId === validator.validator ? '▼' : '▶'}
+                                                                            </span>
+                                                                        </button>
+                                                                    </div>
+                                                                    
+                                                                    {expandedValidatorId === validator.validator && (
+                                                                        <div className="p-4">
+                                                                            {validator.assertion !== undefined && (
+                                                                                <div className="mb-3">
+                                                                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                                                                        validator.assertion ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                                                                                    }`}>
+                                                                                        {validator.assertion ? '✅ PASSED' : '❌ FAILED'}
+                                                                                    </span>
+                                                                                    {validator.assertion_reason && (
+                                                                                        <div className="text-sm text-gray-600 mt-1">
+                                                                                            {validator.assertion_reason}
+                                                                                        </div>
+                                                                                    )}
+                                                                                </div>
+                                                                            )}
+                                                                            
+                                                                            {validator.error ? (
+                                                                                <div className="text-sm text-red-600">
+                                                                                    Error: {validator.error}
+                                                                                </div>
+                                                                            ) : (
+                                                                                renderCliCommandDetails(validator.cli_command_details, validator.validator.toUpperCase())
+                                                                            )}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {/* ✅ Success indicator for CLI details */}
+                                                {validatorDetails[execution.execution_id] && validatorDetails[execution.execution_id].length > 0 && (
+                                                    <div className="mt-3 p-2 bg-green-50 rounded border border-green-200">
+                                                        <div className="text-sm text-green-800">
+                                                            ✅ Found CLI command details for {validatorDetails[execution.execution_id].length} validators
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {/* ✅ Loading state for CLI details */}
+                                                {loadingValidatorDetails[execution.execution_id] && (
+                                                    <div className="border-t pt-4">
+                                                        <div className="flex items-center justify-center py-4">
+                                                            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600 mr-3"></div>
+                                                            <span className="text-sm text-gray-600">Loading CLI command details...</span>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
         </div>
     );

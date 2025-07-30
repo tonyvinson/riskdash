@@ -142,6 +142,7 @@ resource "aws_lambda_function" "ksi_validators" {
     variables = {
       ENVIRONMENT = var.environment
       VALIDATOR_TYPE = upper(each.key)
+      KSI_DEFINITIONS_TABLE = var.ksi_definitions_table
       KSI_EXECUTION_HISTORY_TABLE = var.ksi_execution_history_table
       TENANT_CONFIG_TABLE = var.tenant_ksi_configurations_table
     }
